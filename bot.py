@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import base64
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler,
@@ -60,21 +61,58 @@ def clean_chapter_name(chapter):
     cleaned = cleaned.lower().strip().replace(' ', '_')
     return cleaned
 
+def encode_chapter_name(chapter_name):
+    """Encode chapter name for callback data using base64."""
+    try:
+        encoded = base64.urlsafe_b64encode(chapter_name.encode('utf-8')).decode('utf-8')
+        # Remove padding to make it shorter
+        return encoded.rstrip('=')
+    except:
+        # Fallback to cleaned name if encoding fails
+        return clean_chapter_name(chapter_name)
+
+def decode_chapter_name(encoded_name):
+    """Decode chapter name from callback data."""
+    try:
+        # Add padding back if needed
+        padding = 4 - (len(encoded_name) % 4)
+        if padding != 4:
+            encoded_name += '=' * padding
+        decoded = base64.urlsafe_b64decode(encoded_name.encode('utf-8')).decode('utf-8')
+        return decoded
+    except:
+        # If decoding fails, return as-is
+        return encoded_name
+
 def find_original_chapter(subject, chapter_encoded):
     """Find original chapter name from encoded callback name"""
     db = load_db()
     if subject not in db:
         return None
     
-    if chapter_encoded in db[subject]:
-        return chapter_encoded
+    # First try to decode as base64
+    try:
+        decoded_name = decode_chapter_name(chapter_encoded)
+        print(f"🔍 DEBUG find_original_chapter: decoded='{decoded_name}'")
+        
+        # Check if decoded name exists exactly
+        if decoded_name in db[subject]:
+            return decoded_name
+    except:
+        pass
     
+    # If not found, try with cleaned name matching
     for stored_chapter in db[subject].keys():
+        # Try exact match with encoded version
+        if encode_chapter_name(stored_chapter) == chapter_encoded:
+            return stored_chapter
+        
+        # Try cleaned name match
         if clean_chapter_name(stored_chapter) == chapter_encoded:
             return stored_chapter
-    
-    for stored_chapter in db[subject].keys():
-        if stored_chapter.lower().replace(' ', '_') == chapter_encoded:
+        
+        # Try case-insensitive match
+        if stored_chapter.lower().replace(' ', '_') == chapter_encoded.lower():
             return stored_chapter
     
     return None
@@ -466,7 +504,7 @@ def callback_handler(update: Update, context: CallbackContext):
             keyboard.append([
                 InlineKeyboardButton(
                     f"🗑️ {ch} ({content_count} items)", 
-                    callback_data=f"confirm_delete_chapter_{subject}_{clean_chapter_name(ch)}"
+                    callback_data=f"confirm_delete_chapter_{subject}_{encode_chapter_name(ch)}"
                 )
             ])
         
@@ -495,7 +533,7 @@ def callback_handler(update: Update, context: CallbackContext):
             
             # Show confirmation
             keyboard = [
-                [InlineKeyboardButton("✅ YES, Delete Entire Chapter", callback_data=f"execute_delete_chapter_{subject}_{clean_chapter_name(original_chapter)}")],
+                [InlineKeyboardButton("✅ YES, Delete Entire Chapter", callback_data=f"execute_delete_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
                 [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"delete_chapter_{subject}")]
             ]
             
@@ -628,7 +666,7 @@ def callback_handler(update: Update, context: CallbackContext):
             keyboard.append([
                 InlineKeyboardButton(
                     f"📖 {ch}", 
-                    callback_data=f"select_chapter_content_{subject}_{clean_chapter_name(ch)}"
+                    callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(ch)}"
                 )
             ])
         
@@ -666,7 +704,7 @@ def callback_handler(update: Update, context: CallbackContext):
                         keyboard.append([
                             InlineKeyboardButton(
                                 f"🗑️ Delete All Lectures ({lect_count})", 
-                                callback_data=f"delete_all_lectures_{subject}_{clean_chapter_name(original_chapter)}"
+                                callback_data=f"delete_all_lectures_{subject}_{encode_chapter_name(original_chapter)}"
                             )
                         ])
                         # Individual lecture numbers
@@ -676,14 +714,14 @@ def callback_handler(update: Update, context: CallbackContext):
                             keyboard.append([
                                 InlineKeyboardButton(
                                     f"🗑️ Delete Lecture {lect_no}", 
-                                    callback_data=f"delete_lecture_{subject}_{clean_chapter_name(original_chapter)}_{lect_no}"
+                                    callback_data=f"delete_lecture_{subject}_{encode_chapter_name(original_chapter)}_{lect_no}"
                                 )
                             ])
                     else:
                         keyboard.append([
                             InlineKeyboardButton(
                                 f"🗑️ Delete Lecture", 
-                                callback_data=f"delete_lecture_{subject}_{clean_chapter_name(original_chapter)}_1"
+                                callback_data=f"delete_lecture_{subject}_{encode_chapter_name(original_chapter)}_1"
                             )
                         ])
                 
@@ -692,7 +730,7 @@ def callback_handler(update: Update, context: CallbackContext):
                     keyboard.append([
                         InlineKeyboardButton(
                             f"🗑️ Delete Notes", 
-                            callback_data=f"delete_content_{subject}_{clean_chapter_name(original_chapter)}_notes"
+                            callback_data=f"delete_content_{subject}_{encode_chapter_name(original_chapter)}_notes"
                         )
                     ])
                 
@@ -701,7 +739,7 @@ def callback_handler(update: Update, context: CallbackContext):
                     keyboard.append([
                         InlineKeyboardButton(
                             f"🗑️ Delete DPP", 
-                            callback_data=f"delete_content_{subject}_{clean_chapter_name(original_chapter)}_dpp"
+                            callback_data=f"delete_content_{subject}_{encode_chapter_name(original_chapter)}_dpp"
                         )
                     ])
             
@@ -740,8 +778,8 @@ def callback_handler(update: Update, context: CallbackContext):
                     lect_count = len(db[subject][original_chapter]["lecture"])
             
             keyboard = [
-                [InlineKeyboardButton("✅ YES, Delete All Lectures", callback_data=f"execute_delete_all_lectures_{subject}_{clean_chapter_name(original_chapter)}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{clean_chapter_name(original_chapter)}")]
+                [InlineKeyboardButton("✅ YES, Delete All Lectures", callback_data=f"execute_delete_all_lectures_{subject}_{encode_chapter_name(original_chapter)}")],
+                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
             ]
             
             query.edit_message_text(
@@ -791,7 +829,7 @@ def callback_handler(update: Update, context: CallbackContext):
         
         # Return to content selection
         keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{clean_chapter_name(original_chapter)}")],
+            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
             get_back_button("delete_menu")
         ]
         query.message.reply_text(
@@ -816,8 +854,8 @@ def callback_handler(update: Update, context: CallbackContext):
             
             # Confirm deletion of specific lecture
             keyboard = [
-                [InlineKeyboardButton("✅ YES, Delete Lecture", callback_data=f"execute_delete_lecture_{subject}_{clean_chapter_name(original_chapter)}_{lecture_no}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{clean_chapter_name(original_chapter)}")]
+                [InlineKeyboardButton("✅ YES, Delete Lecture", callback_data=f"execute_delete_lecture_{subject}_{encode_chapter_name(original_chapter)}_{lecture_no}")],
+                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
             ]
             
             query.edit_message_text(
@@ -874,7 +912,7 @@ def callback_handler(update: Update, context: CallbackContext):
         
         # Return to content selection
         keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{clean_chapter_name(original_chapter)}")],
+            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
             get_back_button("delete_menu")
         ]
         query.message.reply_text(
@@ -909,8 +947,8 @@ def callback_handler(update: Update, context: CallbackContext):
             # Confirm deletion
             keyboard = [
                 [InlineKeyboardButton(f"✅ YES, Delete {content_type_names.get(content_type, content_type)}", 
-                                     callback_data=f"execute_delete_{content_type}_{subject}_{clean_chapter_name(original_chapter)}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{clean_chapter_name(original_chapter)}")]
+                                     callback_data=f"execute_delete_{content_type}_{subject}_{encode_chapter_name(original_chapter)}")],
+                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
             ]
             
             query.edit_message_text(
@@ -962,7 +1000,7 @@ def callback_handler(update: Update, context: CallbackContext):
         
         # Return to content selection
         keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{clean_chapter_name(original_chapter)}")],
+            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
             get_back_button("delete_menu")
         ]
         query.message.reply_text(
@@ -1011,7 +1049,7 @@ def callback_handler(update: Update, context: CallbackContext):
             keyboard.append([
                 InlineKeyboardButton(
                     f"📖 {ch}", 
-                    callback_data=f"view_chapter_{subject}_{clean_chapter_name(ch)}"
+                    callback_data=f"view_chapter_{subject}_{encode_chapter_name(ch)}"
                 )
             ])
         
@@ -1069,7 +1107,7 @@ def callback_handler(update: Update, context: CallbackContext):
                 content_text += "📭 *No content available*\n"
             
             keyboard = [
-                [InlineKeyboardButton("🗑️ Delete Content from This Chapter", callback_data=f"select_chapter_content_{subject}_{clean_chapter_name(original_chapter)}")],
+                [InlineKeyboardButton("🗑️ Delete Content from This Chapter", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")],
                 get_back_button("delete_menu")
             ]
             
@@ -1111,10 +1149,12 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # Handle selecting existing chapters for a subject
+    # ============== FIXED: Handle selecting existing chapters for a subject ==============
     elif data.startswith("admin_existing_"):
         subject = data.replace("admin_existing_", "")
         db = load_db()
+        
+        print(f"🔍 DEBUG admin_existing_: subject={subject}")
         
         if subject not in db or not db[subject]:
             keyboard = [
@@ -1130,6 +1170,8 @@ def callback_handler(update: Update, context: CallbackContext):
         
         chapters = list(db[subject].keys())
         chapters.sort()
+        
+        print(f"🔍 DEBUG: Chapters in {subject}: {chapters}")
         
         # Show existing chapters for selection
         keyboard = []
@@ -1149,10 +1191,14 @@ def callback_handler(update: Update, context: CallbackContext):
             
             content_status = " ".join(content_types) if content_types else "📭"
             
+            # FIXED: Use base64 encoding for chapter name
+            encoded_chapter = encode_chapter_name(ch)
+            print(f"🔍 DEBUG: Chapter '{ch}' -> encoded '{encoded_chapter}'")
+            
             keyboard.append([
                 InlineKeyboardButton(
                     f"{content_status} {ch}", 
-                    callback_data=f"admin_edit_{subject}_{clean_chapter_name(ch)}"
+                    callback_data=f"admin_edit_{subject}_{encoded_chapter}"
                 )
             ])
         
@@ -1168,19 +1214,43 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # Handle selecting a specific chapter to edit
+    # ============== FIXED: Handle selecting a specific chapter to edit ==============
     elif data.startswith("admin_edit_"):
-        parts = data.split("_", 2)
-        if len(parts) >= 3:
+        try:
+            print(f"🔍 DEBUG admin_edit_: data={data}")
+            parts = data.split("_", 2)
+            if len(parts) < 3:
+                query.answer("❌ Invalid callback data format", show_alert=True)
+                return
+            
             subject = parts[1]
             chapter_encoded = parts[2]
             
+            print(f"🔍 DEBUG: subject={subject}, encoded_chapter={chapter_encoded}")
+            
+            # Decode the chapter name
+            chapter_name = decode_chapter_name(chapter_encoded)
+            print(f"🔍 DEBUG: decoded chapter='{chapter_name}'")
+            
             # Find original chapter name
             original_chapter = find_original_chapter(subject, chapter_encoded)
+            print(f"🔍 DEBUG: original_chapter='{original_chapter}'")
             
             if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
+                db = load_db()
+                print(f"🔍 DEBUG: Database: {db.get(subject, {})}")
+                print(f"🔍 DEBUG: Looking for '{chapter_name}' in {list(db.get(subject, {}).keys())}")
+                
+                # Try to match by cleaned name
+                if subject in db:
+                    for ch in db[subject].keys():
+                        if clean_chapter_name(ch) == chapter_encoded:
+                            original_chapter = ch
+                            break
+                
+                if not original_chapter:
+                    query.answer(f"❌ Chapter not found: '{chapter_name}'", show_alert=True)
+                    return
             
             admin_state["subject"] = subject
             admin_state["chapter"] = original_chapter
@@ -1221,6 +1291,9 @@ def callback_handler(update: Update, context: CallbackContext):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        except Exception as e:
+            print(f"❌ ERROR in admin_edit_: {str(e)}")
+            query.answer("❌ Error loading chapter", show_alert=True)
         return
 
     # Handle lecture type selection
@@ -1841,10 +1914,10 @@ def message_handler(update: Update, context: CallbackContext):
         
         if ctype == "lecture":
             keyboard.append([InlineKeyboardButton(f"📤 Add another lecture to '{chapter}'", 
-                                                callback_data=f"admin_edit_{subject}_{clean_chapter_name(chapter)}")])
+                                                callback_data=f"admin_edit_{subject}_{encode_chapter_name(chapter)}")])
         else:
             keyboard.append([InlineKeyboardButton(f"📤 Add more to '{chapter}'", 
-                                                callback_data=f"admin_edit_{subject}_{clean_chapter_name(chapter)}")])
+                                                callback_data=f"admin_edit_{subject}_{encode_chapter_name(chapter)}")])
         
         keyboard.append([InlineKeyboardButton(f"📁 Select another chapter in {subject.capitalize()}", 
                                             callback_data=f"admin_existing_{subject}")])
