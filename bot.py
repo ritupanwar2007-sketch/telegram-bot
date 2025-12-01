@@ -26,6 +26,14 @@ def start(update: Update, context: CallbackContext):
         reply_markup=subject_keyboard("user")
     )
 
+def admin(update: Update, context: CallbackContext):
+    if update.message.from_user.id != ADMIN_ID:
+        return update.message.reply_text("Not admin")
+    update.message.reply_text(
+        "Admin Panel – Select subject:",
+        reply_markup=subject_keyboard("admin")
+    )
+
 def subject_keyboard(mode):
     keyboard = [
         [InlineKeyboardButton("Physics", callback_data=f"{mode}_sub_physics")],
