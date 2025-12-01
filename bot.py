@@ -92,7 +92,7 @@ def out(update: Update, context: CallbackContext):
         parse_mode="Markdown"
     )
 
-def broadcast_new_content(context: CallbackContext, subject, chapter, content_type, file_name=None):
+def broadcast_new_content(context: CallbackContext, subject, chapter, content_type, file_name=None, lecture_no=None):
     """Send notification to all users about new content"""
     if not user_notifications:
         return
@@ -107,13 +107,18 @@ def broadcast_new_content(context: CallbackContext, subject, chapter, content_ty
         f"📢 *NEW CONTENT UPLOADED!*\n\n"
         f"📘 *Subject:* {subject.capitalize()}\n"
         f"📖 *Chapter:* {chapter}\n"
-        f"📁 *Type:* {content_type_names.get(content_type, content_type)}\n"
-        f"📍 *Path:* `/{subject}/{chapter}/{content_type}`\n\n"
-        f"👉 Use /start to access it now!"
+        f"📁 *Type:* {content_type_names.get(content_type, content_type)}"
     )
+    
+    if lecture_no and content_type == "lecture":
+        notification_text += f"\n🔢 *Lecture No:* {lecture_no}"
+    
+    notification_text += f"\n📍 *Path:* `/{subject}/{chapter}/{content_type}`"
     
     if file_name:
         notification_text += f"\n📄 *File:* {file_name}"
+    
+    notification_text += f"\n\n👉 Use /start to access it now!"
     
     for user_id in user_notifications:
         try:
@@ -146,10 +151,10 @@ def get_back_button(back_to, data=None):
         return [InlineKeyboardButton("🔙 Back to Chapters", callback_data=f"back_chapters_{data}")]
     elif back_to == "types":
         return [InlineKeyboardButton("🔙 Back to Content Types", callback_data=f"back_types_{data}")]
-    elif back_to == "admin_subjects":
-        return [InlineKeyboardButton("🔙 Back to Admin Panel", callback_data="back_admin_subjects")]
     elif back_to == "admin_main":
         return [InlineKeyboardButton("🔙 Back to Admin Main", callback_data="back_to_admin_main")]
+    elif back_to == "lectures":
+        return [InlineKeyboardButton("🔙 Back to Lectures", callback_data=f"back_lectures_{data}")]
 
 # Global admin state
 admin_state = {}
@@ -221,7 +226,7 @@ def callback_handler(update: Update, context: CallbackContext):
                 return
                 
             keyboard = [
-                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_lecture")],
+                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_lecture_select_{subject}_{clean_chapter_name(original_chapter)}")],
                 [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
                 [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
             ]
@@ -231,6 +236,60 @@ def callback_handler(update: Update, context: CallbackContext):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        return
+    
+    elif data.startswith("back_lectures_"):
+        parts = data.replace("back_lectures_", "").split("_")
+        if len(parts) >= 2:
+            subject = parts[0]
+            chapter_encoded = "_".join(parts[1:])
+            
+            original_chapter = find_original_chapter(subject, chapter_encoded)
+            
+            if not original_chapter:
+                query.edit_message_text("❌ Chapter not found in database.")
+                return
+                
+            # Show available lecture numbers
+            db = load_db()
+            lecture_numbers = []
+            if subject in db and original_chapter in db[subject] and "lecture" in db[subject][original_chapter]:
+                lecture_data = db[subject][original_chapter]["lecture"]
+                if isinstance(lecture_data, dict):
+                    lecture_numbers = list(lecture_data.keys())
+                    lecture_numbers.sort(key=lambda x: int(x) if x.isdigit() else x)
+            
+            if not lecture_numbers:
+                keyboard = [
+                    [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_lecture_select_{subject}_{clean_chapter_name(original_chapter)}")],
+                    [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
+                    [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
+                ]
+                keyboard.append(get_back_button("chapters", subject))
+                query.edit_message_text(
+                    f"📂 *{original_chapter}*\nSelect content type:",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            else:
+                # Create buttons for lecture numbers
+                keyboard = []
+                for i in range(0, len(lecture_numbers), 3):
+                    row = []
+                    for j in range(3):
+                        if i + j < len(lecture_numbers):
+                            lect_no = lecture_numbers[i + j]
+                            row.append(InlineKeyboardButton(f"📹 {lect_no}", 
+                                                           callback_data=f"user_lecture_{subject}_{clean_chapter_name(original_chapter)}_{lect_no}"))
+                    keyboard.append(row)
+                
+                keyboard.append(get_back_button("types", f"{subject}_{clean_chapter_name(original_chapter)}"))
+                
+                query.edit_message_text(
+                    f"📹 *{original_chapter} - Lectures*\n\nSelect lecture number:",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
         return
         
     elif data == "back_admin_subjects":
@@ -243,7 +302,6 @@ def callback_handler(update: Update, context: CallbackContext):
     
     # Admin main menu options
     elif data == "admin_select_chapter":
-        # Show subjects for selecting existing chapter
         keyboard = [
             [InlineKeyboardButton("📘 Physics", callback_data="admin_existing_physics")],
             [InlineKeyboardButton("🧪 Chemistry", callback_data="admin_existing_chemistry")],
@@ -259,7 +317,6 @@ def callback_handler(update: Update, context: CallbackContext):
         return
     
     elif data == "admin_new_chapter":
-        # Show subjects for adding NEW chapter
         keyboard = [
             [InlineKeyboardButton("📘 Physics", callback_data="admin_new_physics")],
             [InlineKeyboardButton("🧪 Chemistry", callback_data="admin_new_chemistry")],
@@ -300,7 +357,11 @@ def callback_handler(update: Update, context: CallbackContext):
             # Show what content types are already available
             content_types = []
             if "lecture" in db[subject][ch]:
-                content_types.append("🎥")
+                if isinstance(db[subject][ch]["lecture"], dict):
+                    lect_count = len(db[subject][ch]["lecture"])
+                    content_types.append(f"🎥{lect_count}")
+                else:
+                    content_types.append("🎥")
             if "notes" in db[subject][ch]:
                 content_types.append("📝")
             if "dpp" in db[subject][ch]:
@@ -320,7 +381,7 @@ def callback_handler(update: Update, context: CallbackContext):
         
         query.edit_message_text(
             f"📂 *{subject.capitalize()} - Existing Chapters:*\n\n"
-            f"🎥 = Lecture  📝 = Notes  📊 = DPP  📭 = No content\n\n"
+            f"🎥 = Lecture(s)  📝 = Notes  📊 = DPP  📭 = No content\n\n"
             f"Select a chapter to add more content:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
@@ -343,11 +404,11 @@ def callback_handler(update: Update, context: CallbackContext):
             
             admin_state["subject"] = subject
             admin_state["chapter"] = original_chapter
-            admin_state["step"] = "type"  # Skip chapter name step
+            admin_state["step"] = "type"
             
             # Show content type selection for this chapter
             keyboard = [
-                [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_type_lecture")],
+                [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_lecture_type")],
                 [InlineKeyboardButton("📝 Notes (PDF)", callback_data="admin_type_notes")],
                 [InlineKeyboardButton("📊 DPP (PDF)", callback_data="admin_type_dpp")],
                 get_back_button("admin_main")
@@ -358,7 +419,11 @@ def callback_handler(update: Update, context: CallbackContext):
             existing_content = []
             if subject in db and original_chapter in db[subject]:
                 if "lecture" in db[subject][original_chapter]:
-                    existing_content.append("🎥 Lecture")
+                    if isinstance(db[subject][original_chapter]["lecture"], dict):
+                        lect_count = len(db[subject][original_chapter]["lecture"])
+                        existing_content.append(f"🎥 {lect_count} Lectures")
+                    else:
+                        existing_content.append("🎥 Lecture")
                 if "notes" in db[subject][original_chapter]:
                     existing_content.append("📝 Notes")
                 if "dpp" in db[subject][original_chapter]:
@@ -376,6 +441,111 @@ def callback_handler(update: Update, context: CallbackContext):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        return
+
+    # Handle lecture type selection (special for lectures with numbers)
+    elif data == "admin_lecture_type":
+        admin_state["step"] = "lecture_no"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        # Check if lectures already exist
+        db = load_db()
+        existing_lectures = []
+        if subject in db and chapter in db[subject] and "lecture" in db[subject][chapter]:
+            if isinstance(db[subject][chapter]["lecture"], dict):
+                existing_lectures = list(db[subject][chapter]["lecture"].keys())
+                existing_lectures.sort(key=lambda x: int(x) if x.isdigit() else x)
+        
+        keyboard = []
+        if existing_lectures:
+            keyboard.append([InlineKeyboardButton("➕ Add New Lecture Number", callback_data="admin_new_lecture_no")])
+            
+            # Show existing lecture numbers as options
+            for i in range(0, len(existing_lectures), 3):
+                row = []
+                for j in range(3):
+                    if i + j < len(existing_lectures):
+                        lect_no = existing_lectures[i + j]
+                        row.append(InlineKeyboardButton(f"📹 {lect_no}", 
+                                                       callback_data=f"admin_lecture_no_{lect_no}"))
+                if row:
+                    keyboard.append(row)
+        else:
+            keyboard.append([InlineKeyboardButton("📹 Lecture 1", callback_data="admin_new_lecture_no")])
+        
+        keyboard.append(get_back_button("admin_main"))
+        
+        status_text = ""
+        if existing_lectures:
+            status_text = f"\n\n📹 *Existing lectures:* {', '.join(existing_lectures)}"
+        
+        query.edit_message_text(
+            f"📝 *Adding Lecture to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"Select lecture number or add new:{status_text}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Handle selecting existing lecture number
+    elif data.startswith("admin_lecture_no_"):
+        lecture_no = data.replace("admin_lecture_no_", "")
+        admin_state["lecture_no"] = lecture_no
+        admin_state["step"] = "upload"
+        admin_state["ctype"] = "lecture"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        keyboard = [
+            get_back_button("admin_main"),
+            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+        ]
+        
+        query.edit_message_text(
+            f"⬆️ *Uploading Lecture {lecture_no} to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"*This will replace existing Lecture {lecture_no}*\n\n"
+            f"Please send the video file now:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Handle new lecture number
+    elif data == "admin_new_lecture_no":
+        admin_state["step"] = "ask_lecture_no"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        keyboard = [
+            get_back_button("admin_main"),
+            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+        ]
+        
+        # Check existing lectures to suggest next number
+        db = load_db()
+        next_lecture_no = 1
+        if subject in db and chapter in db[subject] and "lecture" in db[subject][chapter]:
+            if isinstance(db[subject][chapter]["lecture"], dict):
+                existing_nums = [int(n) for n in db[subject][chapter]["lecture"].keys() if n.isdigit()]
+                if existing_nums:
+                    next_lecture_no = max(existing_nums) + 1
+        
+        query.edit_message_text(
+            f"📝 *Adding NEW Lecture to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"Enter the lecture number (e.g., {next_lecture_no}):",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     # Handle new chapter selection
@@ -396,115 +566,155 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # Admin subject selection (old way - kept for compatibility)
-    if data.startswith("admin_sub_"):
-        subject = data.replace("admin_sub_", "")
-        admin_state["subject"] = subject
-        admin_state["step"] = "chapter"
-        
-        keyboard = [
-            get_back_button("admin_subjects"),
-            [InlineKeyboardButton("❌ Exit Admin Mode", callback_data="exit_admin_mode")]
-        ]
-        query.edit_message_text(
-            f"📘 *{subject.capitalize()} Selected*\n\n📝 Please send the *chapter name*:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    # Exit admin mode from callback
-    if data == "exit_admin_mode":
-        admin_state.clear()
-        query.edit_message_text(
-            "✅ *Exited Admin Mode*\n\nUse /start to browse content.",
-            parse_mode="Markdown"
-        )
-        return
-
-    # User subject selection
-    if data.startswith("user_sub_"):
-        subject = data.replace("user_sub_", "")
-        db = load_db()
-        if subject not in db or not db[subject]:
-            query.edit_message_text(
-                f"📭 No content available for *{subject.capitalize()}* yet.\nPlease check back later!",
-                parse_mode="Markdown"
-            )
-            return
-        
-        chapters = list(db[subject].keys())
-        chapters.sort()
-        
-        keyboard = []
-        for ch in chapters:
-            callback_name = clean_chapter_name(ch)
-            keyboard.append([InlineKeyboardButton(f"📖 {ch}", callback_data=f"user_ch_{subject}_{callback_name}")])
-        keyboard.append(get_back_button("subjects"))
-        query.edit_message_text(
-            f"📂 *{subject.capitalize()} - Select Chapter:*",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-
-    # User chapter selection
-    if data.startswith("user_ch_"):
-        try:
-            parts = data.split("_")
-            if len(parts) >= 4:
-                subject = parts[2]
-                chapter_encoded = "_".join(parts[3:])
-            else:
-                subject = data.split("_")[2] if len(data.split("_")) > 2 else ""
-                chapter_encoded = data.split("_")[3] if len(data.split("_")) > 3 else ""
-            
-            print(f"🔍 DEBUG: user_ch_ parsed - subject: {subject}, chapter_encoded: {chapter_encoded}")
-            
-            if not subject or not chapter_encoded:
-                query.edit_message_text("❌ Invalid chapter selection.")
-                return
+    # User selects lectures - show lecture numbers
+    elif data.startswith("user_lecture_select_"):
+        parts = data.replace("user_lecture_select_", "").split("_")
+        if len(parts) >= 2:
+            subject = parts[0]
+            chapter_encoded = "_".join(parts[1:])
             
             original_chapter = find_original_chapter(subject, chapter_encoded)
             
             if not original_chapter:
-                db = load_db()
-                print(f"🔍 DEBUG: Database contents for {subject}: {db.get(subject, {})}")
-                print(f"🔍 DEBUG: Looking for chapter matching: {chapter_encoded}")
-                
+                query.edit_message_text("❌ Chapter not found.")
+                return
+            
+            # Get available lecture numbers
+            db = load_db()
+            lecture_numbers = []
+            if subject in db and original_chapter in db[subject] and "lecture" in db[subject][original_chapter]:
+                lecture_data = db[subject][original_chapter]["lecture"]
+                if isinstance(lecture_data, dict):
+                    lecture_numbers = list(lecture_data.keys())
+                    lecture_numbers.sort(key=lambda x: int(x) if x.isdigit() else x)
+            
+            if not lecture_numbers:
+                keyboard = [
+                    [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_lecture_select_{subject}_{clean_chapter_name(original_chapter)}")],
+                    [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
+                    [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
+                ]
+                keyboard.append(get_back_button("chapters", subject))
                 query.edit_message_text(
-                    f"❌ Chapter not found.\n\nPlease try selecting the chapter again from the list.",
-                    parse_mode="Markdown"
+                    f"📭 No lectures available for *{original_chapter}* yet.\n\nPlease select another content type:",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
                 )
                 return
-                
-            keyboard = [
-                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_lecture")],
-                [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
-                [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
-            ]
-            keyboard.append(get_back_button("chapters", subject))
+            
+            # Create buttons for lecture numbers (3 per row)
+            keyboard = []
+            for i in range(0, len(lecture_numbers), 3):
+                row = []
+                for j in range(3):
+                    if i + j < len(lecture_numbers):
+                        lect_no = lecture_numbers[i + j]
+                        row.append(InlineKeyboardButton(f"📹 {lect_no}", 
+                                                       callback_data=f"user_lecture_{subject}_{clean_chapter_name(original_chapter)}_{lect_no}"))
+                if row:
+                    keyboard.append(row)
+            
+            keyboard.append(get_back_button("types", f"{subject}_{clean_chapter_name(original_chapter)}"))
+            
             query.edit_message_text(
-                f"📂 *{original_chapter}*\nSelect content type:",
+                f"📹 *{original_chapter} - Lectures*\n\nSelect lecture number:",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
-        except Exception as e:
-            print(f"❌ ERROR in user_ch_: {str(e)}")
-            query.edit_message_text(
-                "❌ Error processing your selection. Please try again.",
-                parse_mode="Markdown"
-            )
         return
-
-    # User content type selection
-    if data.startswith("user_type_"):
+    
+    # User selects specific lecture number
+    elif data.startswith("user_lecture_"):
+        parts = data.split("_")
+        if len(parts) >= 5:
+            subject = parts[2]
+            chapter_encoded = parts[3]
+            lecture_no = parts[4]
+            
+            original_chapter = find_original_chapter(subject, chapter_encoded)
+            
+            if not original_chapter:
+                query.edit_message_text("❌ Chapter not found.")
+                return
+            
+            # Get the specific lecture file
+            db = load_db()
+            file_id = None
+            if (subject in db and 
+                original_chapter in db[subject] and 
+                "lecture" in db[subject][original_chapter] and
+                isinstance(db[subject][original_chapter]["lecture"], dict) and
+                lecture_no in db[subject][original_chapter]["lecture"]):
+                
+                file_id = db[subject][original_chapter]["lecture"][lecture_no]
+            
+            if not file_id:
+                # Go back to lecture selection
+                keyboard = []
+                if subject in db and original_chapter in db[subject] and "lecture" in db[subject][original_chapter]:
+                    if isinstance(db[subject][original_chapter]["lecture"], dict):
+                        lecture_numbers = list(db[subject][original_chapter]["lecture"].keys())
+                        lecture_numbers.sort(key=lambda x: int(x) if x.isdigit() else x)
+                        
+                        for i in range(0, len(lecture_numbers), 3):
+                            row = []
+                            for j in range(3):
+                                if i + j < len(lecture_numbers):
+                                    lect_no = lecture_numbers[i + j]
+                                    row.append(InlineKeyboardButton(f"📹 {lect_no}", 
+                                                                   callback_data=f"user_lecture_{subject}_{clean_chapter_name(original_chapter)}_{lect_no}"))
+                            if row:
+                                keyboard.append(row)
+                
+                keyboard.append(get_back_button("types", f"{subject}_{clean_chapter_name(original_chapter)}"))
+                
+                query.edit_message_text(
+                    f"❌ *Lecture {lecture_no} not found* for *{original_chapter}*.\n\nSelect another lecture:",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                return
+            
+            # Send the lecture video
+            try:
+                context.bot.send_video(
+                    chat_id=query.message.chat_id,
+                    video=file_id,
+                    caption=f"📹 *{original_chapter} - Lecture {lecture_no}*\n\n_Enjoy your study!_ 📚",
+                    parse_mode="Markdown"
+                )
+                
+                # Send navigation options
+                keyboard = [
+                    get_back_button("lectures", f"{subject}_{clean_chapter_name(original_chapter)}"),
+                    get_back_button("subjects")
+                ]
+                query.message.reply_text(
+                    "✅ *Lecture Sent Successfully!*\n\nWhat would you like to do next?",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+                
+            except Exception as e:
+                print(f"❌ ERROR sending lecture: {str(e)}")
+                query.edit_message_text(
+                    f"❌ *Error*\n\nFailed to send lecture. Please try again later.",
+                    parse_mode="Markdown"
+                )
+        return
+    
+    # User content type selection (for notes and DPP)
+    elif data.startswith("user_type_"):
         try:
             parts = data.split("_")
             if len(parts) >= 5:
                 subject = parts[2]
                 chapter_encoded = parts[3]
                 ctype = parts[4]
+                
+                # Skip if it's lecture (handled separately)
+                if ctype == "lecture":
+                    return
                 
                 print(f"🔍 DEBUG: user_type_ parsed - subject: {subject}, chapter_encoded: {chapter_encoded}, type: {ctype}")
                 
@@ -521,7 +731,7 @@ def callback_handler(update: Update, context: CallbackContext):
                 
                 if not file_id:
                     keyboard = [
-                        [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_lecture")],
+                        [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_lecture_select_{subject}_{clean_chapter_name(original_chapter)}")],
                         [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
                         [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
                     ]
@@ -541,21 +751,13 @@ def callback_handler(update: Update, context: CallbackContext):
                     return
                 
                 try:
-                    if ctype == "lecture":
-                        context.bot.send_video(
-                            chat_id=query.message.chat_id,
-                            video=file_id,
-                            caption=f"🎥 *{original_chapter} - Lecture*\n\n_Enjoy your study!_ 📚",
-                            parse_mode="Markdown"
-                        )
-                    else:
-                        doc_type = "Notes" if ctype == "notes" else "DPP"
-                        context.bot.send_document(
-                            chat_id=query.message.chat_id,
-                            document=file_id,
-                            caption=f"📄 *{original_chapter} - {doc_type}*\n\n_Happy Learning!_ ✨",
-                            parse_mode="Markdown"
-                        )
+                    doc_type = "Notes" if ctype == "notes" else "DPP"
+                    context.bot.send_document(
+                        chat_id=query.message.chat_id,
+                        document=file_id,
+                        caption=f"📄 *{original_chapter} - {doc_type}*\n\n_Happy Learning!_ ✨",
+                        parse_mode="Markdown"
+                    )
                     
                     keyboard = [
                         get_back_button("types", f"{subject}_{clean_chapter_name(original_chapter)}"),
@@ -586,34 +788,33 @@ def admin_type(update: Update, context: CallbackContext):
     data = query.data
     query.answer()
     
-    if data.startswith("admin_type_"):
-        ctype = data.replace("admin_type_", "")
-        admin_state["ctype"] = ctype
+    if data == "admin_type_notes":
+        admin_state["ctype"] = "notes"
         admin_state["step"] = "upload"
+        show_upload_prompt(query, "Notes PDF (PDF)")
         
-        content_type_names = {
-            "lecture": "Lecture Video (MP4)",
-            "notes": "Notes PDF",
-            "dpp": "DPP PDF"
-        }
-        
-        keyboard = [
-            get_back_button("admin_main"),
-            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
-        ]
-        
-        # Show which chapter we're adding to
-        subject = admin_state.get("subject", "Unknown")
-        chapter = admin_state.get("chapter", "Unknown")
-        
-        query.edit_message_text(
-            f"⬆️ *Uploading to:*\n"
-            f"📘 *Subject:* {subject.capitalize()}\n"
-            f"📖 *Chapter:* {chapter}\n\n"
-            f"*Upload {content_type_names.get(ctype, ctype)}:*\n\nPlease send the file now:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    elif data == "admin_type_dpp":
+        admin_state["ctype"] = "dpp"
+        admin_state["step"] = "upload"
+        show_upload_prompt(query, "DPP PDF (PDF)")
+
+def show_upload_prompt(query, content_type_name):
+    subject = admin_state.get("subject", "Unknown")
+    chapter = admin_state.get("chapter", "Unknown")
+    
+    keyboard = [
+        get_back_button("admin_main"),
+        [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+    ]
+    
+    query.edit_message_text(
+        f"⬆️ *Uploading to:*\n"
+        f"📘 *Subject:* {subject.capitalize()}\n"
+        f"📖 *Chapter:* {chapter}\n\n"
+        f"*Upload {content_type_name}:*\n\nPlease send the file now:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 def message_handler(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
@@ -645,7 +846,7 @@ def message_handler(update: Update, context: CallbackContext):
         admin_state["step"] = "type"
         
         keyboard = [
-            [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_type_lecture")],
+            [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_lecture_type")],
             [InlineKeyboardButton("📝 Notes (PDF)", callback_data="admin_type_notes")],
             [InlineKeyboardButton("📊 DPP (PDF)", callback_data="admin_type_dpp")],
             get_back_button("admin_main"),
@@ -662,11 +863,50 @@ def message_handler(update: Update, context: CallbackContext):
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
+    
+    elif admin_state.get("step") == "ask_lecture_no":
+        lecture_no = update.message.text.strip()
+        if not lecture_no:
+            update.message.reply_text("❌ Please enter a valid lecture number.")
+            return
+        
+        # Validate lecture number
+        try:
+            # Allow numbers like "1", "2.1", "3A", etc.
+            if not re.match(r'^[0-9]+(\.[0-9]+)?[A-Za-z]?$', lecture_no):
+                update.message.reply_text("❌ Please enter a valid lecture number (e.g., 1, 2.1, 3A).")
+                return
+        except:
+            update.message.reply_text("❌ Please enter a valid lecture number.")
+            return
+        
+        admin_state["lecture_no"] = lecture_no
+        admin_state["step"] = "upload"
+        admin_state["ctype"] = "lecture"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        keyboard = [
+            get_back_button("admin_main"),
+            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+        ]
+        
+        update.message.reply_text(
+            f"⬆️ *Uploading Lecture {lecture_no} to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"Please send the video file now:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
 
-    if admin_state.get("step") == "upload":
+    elif admin_state.get("step") == "upload":
         subject = admin_state.get("subject")
         chapter = admin_state.get("chapter")
         ctype = admin_state.get("ctype")
+        lecture_no = admin_state.get("lecture_no")
         
         if not all([subject, chapter, ctype]):
             update.message.reply_text(
@@ -685,7 +925,7 @@ def message_handler(update: Update, context: CallbackContext):
             if update.message.video.file_name:
                 file_name = update.message.video.file_name
             else:
-                file_name = f"{chapter}_lecture.mp4"
+                file_name = f"{chapter}_lecture_{lecture_no}.mp4"
         elif ctype in ["notes", "dpp"] and update.message.document:
             file_id = update.message.document.file_id
             if update.message.document.file_name:
@@ -704,10 +944,21 @@ def message_handler(update: Update, context: CallbackContext):
         db = load_db()
         db.setdefault(subject, {})
         db[subject].setdefault(chapter, {})
-        db[subject][chapter][ctype] = file_id
+        
+        if ctype == "lecture":
+            # Initialize lecture as dictionary if not exists
+            if "lecture" not in db[subject][chapter] or not isinstance(db[subject][chapter]["lecture"], dict):
+                db[subject][chapter]["lecture"] = {}
+            
+            # Store lecture with number
+            db[subject][chapter]["lecture"][lecture_no] = file_id
+        else:
+            # For notes and DPP, store directly
+            db[subject][chapter][ctype] = file_id
+        
         save_db(db)
         
-        print(f"✅ SAVED: Subject='{subject}', Chapter='{chapter}', Type='{ctype}'")
+        print(f"✅ SAVED: Subject='{subject}', Chapter='{chapter}', Type='{ctype}', LectureNo='{lecture_no}'")
         
         # Success message to admin
         content_type_names = {
@@ -716,39 +967,63 @@ def message_handler(update: Update, context: CallbackContext):
             "dpp": "DPP"
         }
         
-        update.message.reply_text(
+        success_text = (
             f"✅ *{content_type_names.get(ctype, ctype)} Saved Successfully!*\n\n"
             f"📘 *Subject:* {subject.capitalize()}\n"
             f"📖 *Chapter:* {chapter}\n"
+        )
+        
+        if ctype == "lecture":
+            success_text += f"🔢 *Lecture No:* {lecture_no}\n"
+        
+        success_text += (
             f"📁 *Type:* {content_type_names.get(ctype, ctype)}\n"
             f"📄 *File:* {file_name}\n"
-            f"📍 *Path:* `/{subject}/{chapter}/{ctype}`\n\n"
-            f"✅ *Content is now visible to all users!*\n"
-            f"📢 *Notification sent to {len(user_notifications)} users!*",
+            f"📍 *Path:* `/{subject}/{chapter}/{ctype}"
+        )
+        
+        if ctype == "lecture":
+            success_text += f"/{lecture_no}`"
+        else:
+            success_text += "`"
+        
+        success_text += f"\n\n✅ *Content is now visible to all users!*\n"
+        success_text += f"📢 *Notification sent to {len(user_notifications)} users!*"
+        
+        update.message.reply_text(
+            success_text,
             parse_mode="Markdown"
         )
         
         # Send notification to ALL users
-        broadcast_new_content(context, subject, chapter, ctype, file_name)
+        broadcast_new_content(context, subject, chapter, ctype, file_name, lecture_no)
         
-        # Show next options - IMPORTANT: Allow adding more to same chapter
-        keyboard = [
-            [InlineKeyboardButton(f"📤 Add more to '{chapter}'", callback_data=f"admin_edit_{subject}_{clean_chapter_name(chapter)}")],
-            [InlineKeyboardButton(f"📁 Select another chapter in {subject.capitalize()}", callback_data=f"admin_existing_{subject}")],
-            get_back_button("admin_main"),
-            [InlineKeyboardButton("❌ Exit Admin Mode", callback_data="exit_admin_mode")]
-        ]
+        # Show next options
+        keyboard = []
+        
+        if ctype == "lecture":
+            keyboard.append([InlineKeyboardButton(f"📤 Add another lecture to '{chapter}'", 
+                                                callback_data=f"admin_edit_{subject}_{clean_chapter_name(chapter)}")])
+        else:
+            keyboard.append([InlineKeyboardButton(f"📤 Add more to '{chapter}'", 
+                                                callback_data=f"admin_edit_{subject}_{clean_chapter_name(chapter)}")])
+        
+        keyboard.append([InlineKeyboardButton(f"📁 Select another chapter in {subject.capitalize()}", 
+                                            callback_data=f"admin_existing_{subject}")])
+        keyboard.append(get_back_button("admin_main"))
+        keyboard.append([InlineKeyboardButton("❌ Exit Admin Mode", callback_data="exit_admin_mode")])
+        
         update.message.reply_text(
             "📋 *What would you like to do next?*",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         
-        # Keep subject in state for easy adding more
+        # Keep subject and chapter in state for easy adding more
         admin_state.clear()
         admin_state["subject"] = subject
-        admin_state["step"] = "type"  # Ready to add more content types
-        admin_state["chapter"] = chapter  # Keep chapter for adding more
+        admin_state["chapter"] = chapter
+        admin_state["step"] = "type"
         return
 
 def main():
@@ -768,6 +1043,7 @@ def main():
     print(f"👑 Admin ID: {ADMIN_ID}")
     print("✅ Uploaded content is visible to ALL users")
     print("🔔 Users will get notifications for new content")
+    print("📹 Multiple lectures per chapter with lecture numbers")
     print("📁 Admin can select existing chapters to add more content")
     print("🔧 Commands: /start, /vishal (admin), /out (exit admin)")
     print("🌐 Website: www.setugyan.live")
