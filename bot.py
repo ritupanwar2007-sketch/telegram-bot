@@ -1,5 +1,6 @@
 import json
 import re
+import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Updater, CommandHandler, MessageHandler,
@@ -13,16 +14,43 @@ BOT_TOKEN = "8570013024:AAEBDhWeV4dZJykQsb8IlcK4dK9g0VTUT04"
 # Store to track who to notify
 user_notifications = set()
 
+def check_database():
+    """Check if database exists and is valid"""
+    if not os.path.exists(DB_FILE):
+        print(f"⚠️ Database file '{DB_FILE}' does not exist. Creating empty database.")
+        with open(DB_FILE, "w") as f:
+            json.dump({}, f)
+        return False
+    
+    try:
+        with open(DB_FILE, "r") as f:
+            data = json.load(f)
+        print(f"✅ Database loaded: {len(data)} subjects")
+        return True
+    except Exception as e:
+        print(f"❌ Database error: {e}")
+        return False
+
 def load_db():
     try:
         with open(DB_FILE, "r") as f:
-            return json.load(f)
-    except:
+            data = json.load(f)
+            print(f"📂 DEBUG: Database loaded successfully: {len(data)} subjects")
+            return data
+    except FileNotFoundError:
+        print(f"📂 DEBUG: Database file not found, creating empty database")
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"❌ DEBUG: JSON decode error: {e}")
+        return {}
+    except Exception as e:
+        print(f"❌ DEBUG: Error loading database: {e}")
         return {}
 
 def save_db(data):
     with open(DB_FILE, "w") as f:
         json.dump(data, f, indent=4)
+    print(f"💾 DEBUG: Database saved: {len(data)} subjects")
 
 def clean_chapter_name(chapter):
     """Clean chapter name for callback data"""
@@ -311,6 +339,65 @@ def callback_handler(update: Update, context: CallbackContext):
                     parse_mode="Markdown",
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
+        return
+    
+    # ============== USER SUBJECT SELECTION - FIXED ==============
+    elif data.startswith("user_sub_"):
+        subject = data.replace("user_sub_", "")
+        
+        print(f"🔍 DEBUG: User selecting subject: {subject}")
+        
+        try:
+            db = load_db()
+            print(f"🔍 DEBUG: Database loaded: {db}")
+            
+            if subject not in db:
+                print(f"🔍 DEBUG: Subject '{subject}' not in database")
+                query.edit_message_text(
+                    f"📭 No content available for *{subject.capitalize()}* yet.\n\n"
+                    f"Please check back later or ask admin to upload content!",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            if not db[subject] or len(db[subject]) == 0:
+                print(f"🔍 DEBUG: Subject '{subject}' exists but has no chapters")
+                query.edit_message_text(
+                    f"📭 No chapters available for *{subject.capitalize()}* yet.\n\n"
+                    f"Please check back later!",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            chapters = list(db[subject].keys())
+            chapters.sort()
+            
+            print(f"🔍 DEBUG: Found chapters for {subject}: {chapters}")
+            
+            # Show original chapter names
+            keyboard = []
+            for ch in chapters:
+                display_name = ch
+                callback_name = clean_chapter_name(ch)
+                print(f"🔍 DEBUG: Chapter '{ch}' -> callback '{callback_name}'")
+                keyboard.append([InlineKeyboardButton(f"📖 {display_name}", callback_data=f"user_ch_{subject}_{callback_name}")])
+            
+            keyboard.append(get_back_button("subjects"))
+            
+            query.edit_message_text(
+                f"📂 *{subject.capitalize()} - Select Chapter:*\n\n"
+                f"Found {len(chapters)} chapter(s)",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            
+        except Exception as e:
+            print(f"❌ ERROR in user_sub_: {str(e)}")
+            query.edit_message_text(
+                f"❌ *Error loading content*\n\n"
+                f"Please try again or contact admin if problem persists.",
+                parse_mode="Markdown"
+            )
         return
     
     # ============== DELETE MODE HANDLERS ==============
@@ -1406,6 +1493,55 @@ def callback_handler(update: Update, context: CallbackContext):
                 )
         return
     
+    # ============== USER CHAPTER SELECTION - FIXED ==============
+    elif data.startswith("user_ch_"):
+        try:
+            parts = data.split("_")
+            if len(parts) >= 4:
+                subject = parts[2]
+                chapter_encoded = "_".join(parts[3:])
+            else:
+                subject = data.split("_")[2] if len(data.split("_")) > 2 else ""
+                chapter_encoded = data.split("_")[3] if len(data.split("_")) > 3 else ""
+            
+            print(f"🔍 DEBUG: user_ch_ parsed - subject: {subject}, chapter_encoded: {chapter_encoded}")
+            
+            if not subject or not chapter_encoded:
+                query.edit_message_text("❌ Invalid chapter selection.")
+                return
+            
+            original_chapter = find_original_chapter(subject, chapter_encoded)
+            
+            if not original_chapter:
+                db = load_db()
+                print(f"🔍 DEBUG: Database contents for {subject}: {db.get(subject, {})}")
+                print(f"🔍 DEBUG: Looking for chapter matching: {chapter_encoded}")
+                
+                query.edit_message_text(
+                    f"❌ Chapter not found.\n\nPlease try selecting the chapter again from the list.",
+                    parse_mode="Markdown"
+                )
+                return
+                
+            keyboard = [
+                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_lecture_select_{subject}_{clean_chapter_name(original_chapter)}")],
+                [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
+                [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
+            ]
+            keyboard.append(get_back_button("chapters", subject))
+            query.edit_message_text(
+                f"📂 *{original_chapter}*\nSelect content type:",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            print(f"❌ ERROR in user_ch_: {str(e)}")
+            query.edit_message_text(
+                "❌ Error processing your selection. Please try again.",
+                parse_mode="Markdown"
+            )
+        return
+    
     # User content type selection (for notes and DPP)
     elif data.startswith("user_type_"):
         try:
@@ -1729,6 +1865,10 @@ def message_handler(update: Update, context: CallbackContext):
         return
 
 def main():
+    # Check and initialize database
+    if not check_database():
+        print("⚠️ Database issues detected. Bot may not show content until admin uploads files.")
+    
     updater = Updater(BOT_TOKEN, use_context=True)
     dp = updater.dispatcher
     
@@ -1751,6 +1891,7 @@ def main():
     print("🔧 Commands: /start, /vishal (admin), /out (exit admin)")
     print("🌐 Website: www.setugyan.live")
     print("🐛 Debug mode: ON")
+    print("💾 Database check: COMPLETE")
     
     updater.start_polling()
     updater.idle()
