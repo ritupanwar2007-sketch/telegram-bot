@@ -30,6 +30,28 @@ def clean_chapter_name(chapter):
     cleaned = cleaned.lower().strip().replace(' ', '_')
     return cleaned
 
+def find_original_chapter(subject, chapter_encoded):
+    """Find original chapter name from encoded callback name"""
+    db = load_db()
+    if subject not in db:
+        return None
+    
+    # Try exact match first
+    if chapter_encoded in db[subject]:
+        return chapter_encoded
+    
+    # Try cleaned version match
+    for stored_chapter in db[subject].keys():
+        if clean_chapter_name(stored_chapter) == chapter_encoded:
+            return stored_chapter
+    
+    # Try reverse: if encoded is already cleaned, find original
+    for stored_chapter in db[subject].keys():
+        if stored_chapter.lower().replace(' ', '_') == chapter_encoded:
+            return stored_chapter
+    
+    return None
+
 def start(update: Update, context: CallbackContext):
     update.message.reply_text(
         "📚 *Board Booster Bot*\n_Created by Vishal_\n\nChoose your subject:",
@@ -88,6 +110,8 @@ def callback_handler(update: Update, context: CallbackContext):
     data = query.data
     query.answer()
 
+    print(f"🔍 DEBUG: Callback data received: {data}")  # Debug log
+
     # Handle back buttons
     if data == "back_subjects":
         query.edit_message_text(
@@ -129,17 +153,10 @@ def callback_handler(update: Update, context: CallbackContext):
             subject = parts[0]
             chapter_encoded = "_".join(parts[1:])
             
-            # Find the original chapter name from database
-            db = load_db()
-            original_chapter = None
-            if subject in db:
-                for stored_chapter in db[subject].keys():
-                    if clean_chapter_name(stored_chapter) == chapter_encoded:
-                        original_chapter = stored_chapter
-                        break
+            original_chapter = find_original_chapter(subject, chapter_encoded)
             
             if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
+                query.edit_message_text("❌ Chapter not found in database.")
                 return
                 
             keyboard = [
@@ -216,30 +233,45 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # User chapter selection
+    # User chapter selection - FIXED VERSION
     if data.startswith("user_ch_"):
-        parts = data.split("_", 2)
-        if len(parts) >= 3:
-            subject = parts[1]
-            chapter_encoded = parts[2]
+        # Parse the callback data properly
+        try:
+            parts = data.split("_")
+            if len(parts) >= 4:
+                subject = parts[2]  # user_ch_physics_electric_field_and_charges
+                chapter_encoded = "_".join(parts[3:])  # Handle multiple underscores
+            else:
+                # Try old format as fallback
+                subject = data.split("_")[2] if len(data.split("_")) > 2 else ""
+                chapter_encoded = data.split("_")[3] if len(data.split("_")) > 3 else ""
             
-            # Find original chapter name from database
-            db = load_db()
-            original_chapter = None
-            if subject in db:
-                for stored_chapter in db[subject].keys():
-                    if clean_chapter_name(stored_chapter) == chapter_encoded:
-                        original_chapter = stored_chapter
-                        break
+            print(f"🔍 DEBUG: user_ch_ parsed - subject: {subject}, chapter_encoded: {chapter_encoded}")
+            
+            if not subject or not chapter_encoded:
+                query.edit_message_text("❌ Invalid chapter selection.")
+                return
+            
+            # Find original chapter name
+            original_chapter = find_original_chapter(subject, chapter_encoded)
             
             if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
+                # Try to show what's in the database
+                db = load_db()
+                print(f"🔍 DEBUG: Database contents for {subject}: {db.get(subject, {})}")
+                print(f"🔍 DEBUG: Looking for chapter matching: {chapter_encoded}")
+                
+                query.edit_message_text(
+                    f"❌ Chapter not found.\n\nPlease try selecting the chapter again from the list.",
+                    parse_mode="Markdown"
+                )
                 return
                 
+            # Create content type selection buttons
             keyboard = [
-                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{chapter_encoded}_lecture")],
-                [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{chapter_encoded}_notes")],
-                [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{chapter_encoded}_dpp")],
+                [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_lecture")],
+                [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
+                [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
             ]
             keyboard.append(get_back_button("chapters", subject))
             query.edit_message_text(
@@ -247,87 +279,101 @@ def callback_handler(update: Update, context: CallbackContext):
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        except Exception as e:
+            print(f"❌ ERROR in user_ch_: {str(e)}")
+            query.edit_message_text(
+                "❌ Error processing your selection. Please try again.",
+                parse_mode="Markdown"
+            )
         return
 
     # User content type selection - FIXED VERSION
     if data.startswith("user_type_"):
-        parts = data.split("_")
-        if len(parts) >= 5:
-            subject = parts[2]
-            chapter_encoded = parts[3]
-            ctype = parts[4]
-            
-            # Find original chapter name from database
-            db = load_db()
-            original_chapter = None
-            file_id = None
-            
-            if subject in db:
-                for stored_chapter in db[subject].keys():
-                    if clean_chapter_name(stored_chapter) == chapter_encoded:
-                        original_chapter = stored_chapter
-                        if ctype in db[subject][stored_chapter]:
-                            file_id = db[subject][stored_chapter][ctype]
-                        break
-            
-            if not file_id:
-                # Show error with options to try other content types
-                keyboard = [
-                    [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{chapter_encoded}_lecture")],
-                    [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{chapter_encoded}_notes")],
-                    [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{chapter_encoded}_dpp")],
-                ]
-                keyboard.append(get_back_button("chapters", subject))
+        try:
+            parts = data.split("_")
+            if len(parts) >= 5:
+                subject = parts[2]
+                chapter_encoded = parts[3]
+                ctype = parts[4]
                 
-                content_type_names = {
-                    "lecture": "Lecture Video",
-                    "notes": "Notes PDF",
-                    "dpp": "DPP (Daily Practice Problems)"
-                }
+                print(f"🔍 DEBUG: user_type_ parsed - subject: {subject}, chapter_encoded: {chapter_encoded}, type: {ctype}")
                 
-                chapter_display = original_chapter if original_chapter else chapter_encoded.replace('_', ' ')
+                # Find original chapter name
+                original_chapter = find_original_chapter(subject, chapter_encoded)
                 
-                query.edit_message_text(
-                    f"⚠️ *Content Not Available*\n\n{content_type_names.get(ctype, ctype)} for *{chapter_display}* is not uploaded yet.\n\nPlease select another content type:",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                return
-            
-            # Send the file
-            try:
-                if ctype == "lecture":
-                    context.bot.send_video(
-                        chat_id=query.message.chat_id,
-                        video=file_id,
-                        caption=f"🎥 *{original_chapter} - Lecture*\n\n_Enjoy your study!_ 📚",
+                if not original_chapter:
+                    query.edit_message_text("❌ Chapter not found.")
+                    return
+                
+                # Get file ID
+                db = load_db()
+                file_id = None
+                if subject in db and original_chapter in db[subject]:
+                    file_id = db[subject][original_chapter].get(ctype)
+                
+                if not file_id:
+                    # Show content type selection again
+                    keyboard = [
+                        [InlineKeyboardButton("🎥 Lectures", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_lecture")],
+                        [InlineKeyboardButton("📝 Notes", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_notes")],
+                        [InlineKeyboardButton("📊 DPP", callback_data=f"user_type_{subject}_{clean_chapter_name(original_chapter)}_dpp")],
+                    ]
+                    keyboard.append(get_back_button("chapters", subject))
+                    
+                    content_type_names = {
+                        "lecture": "Lecture Video",
+                        "notes": "Notes PDF",
+                        "dpp": "DPP (Daily Practice Problems)"
+                    }
+                    
+                    query.edit_message_text(
+                        f"⚠️ *Content Not Available*\n\n{content_type_names.get(ctype, ctype)} for *{original_chapter}* is not uploaded yet.\n\nPlease select another content type:",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    return
+                
+                # Send the file
+                try:
+                    if ctype == "lecture":
+                        context.bot.send_video(
+                            chat_id=query.message.chat_id,
+                            video=file_id,
+                            caption=f"🎥 *{original_chapter} - Lecture*\n\n_Enjoy your study!_ 📚",
+                            parse_mode="Markdown"
+                        )
+                    else:
+                        doc_type = "Notes" if ctype == "notes" else "DPP"
+                        context.bot.send_document(
+                            chat_id=query.message.chat_id,
+                            document=file_id,
+                            caption=f"📄 *{original_chapter} - {doc_type}*\n\n_Happy Learning!_ ✨",
+                            parse_mode="Markdown"
+                        )
+                    
+                    # Send navigation options
+                    keyboard = [
+                        get_back_button("types", f"{subject}_{clean_chapter_name(original_chapter)}"),
+                        get_back_button("subjects")
+                    ]
+                    query.message.reply_text(
+                        "✅ *Content Sent Successfully!*\n\nWhat would you like to do next?",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(keyboard)
+                    )
+                    
+                except Exception as e:
+                    print(f"❌ ERROR sending file: {str(e)}")
+                    query.edit_message_text(
+                        f"❌ *Error*\n\nFailed to send content. Please try again later.",
                         parse_mode="Markdown"
                     )
-                else:
-                    doc_type = "Notes" if ctype == "notes" else "DPP"
-                    context.bot.send_document(
-                        chat_id=query.message.chat_id,
-                        document=file_id,
-                        caption=f"📄 *{original_chapter} - {doc_type}*\n\n_Happy Learning!_ ✨",
-                        parse_mode="Markdown"
-                    )
-                
-                # Send navigation options
-                keyboard = [
-                    get_back_button("types", f"{subject}_{chapter_encoded}"),
-                    get_back_button("subjects")
-                ]
-                query.message.reply_text(
-                    "✅ *Content Sent Successfully!*\n\nWhat would you like to do next?",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup(keyboard)
-                )
-                
-            except Exception as e:
-                query.edit_message_text(
-                    f"❌ *Error*\n\nFailed to send content. Please try again later.\n\n_Error: {str(e)}_",
-                    parse_mode="Markdown"
-                )
+        except Exception as e:
+            print(f"❌ ERROR in user_type_: {str(e)}")
+            query.edit_message_text(
+                "❌ Error processing your request. Please try again.",
+                parse_mode="Markdown"
+            )
         return
 
 def admin_type(update: Update, context: CallbackContext):
@@ -434,9 +480,9 @@ def message_handler(update: Update, context: CallbackContext):
         db[subject][chapter][ctype] = file_id
         save_db(db)
         
-        # Debug: Print what was saved
-        print(f"✅ DEBUG: Saved file for subject='{subject}', chapter='{chapter}', type='{ctype}'")
-        print(f"✅ DEBUG: Database state: {json.dumps(db, indent=2)}")
+        # Print success message
+        print(f"✅ SAVED: Subject='{subject}', Chapter='{chapter}', Type='{ctype}'")
+        print(f"✅ Clean name for callback: '{clean_chapter_name(chapter)}'")
         
         # Success message
         content_type_names = {
@@ -487,6 +533,7 @@ def main():
     print(f"👑 Admin ID: {ADMIN_ID}")
     print("✅ Uploaded content is visible to ALL users")
     print("🔧 Commands: /start, /vishal (admin), /out (exit admin)")
+    print("🐛 Debug mode: ON (shows callback data in console)")
     updater.start_polling()
     updater.idle()
 
