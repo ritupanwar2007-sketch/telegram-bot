@@ -379,7 +379,7 @@ def callback_handler(update: Update, context: CallbackContext):
                 )
         return
     
-    # ============== USER SUBJECT SELECTION - FIXED ==============
+    # ============== USER SUBJECT SELECTION ==============
     elif data.startswith("user_sub_"):
         subject = data.replace("user_sub_", "")
         
@@ -758,366 +758,6 @@ def callback_handler(update: Update, context: CallbackContext):
             )
         return
     
-    elif data.startswith("delete_all_lectures_"):
-        parts = data.replace("delete_all_lectures_", "").split("_", 1)
-        if len(parts) >= 2:
-            subject = parts[0]
-            chapter_encoded = parts[1]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Confirm deletion of all lectures
-            db = load_db()
-            lect_count = 0
-            if subject in db and original_chapter in db[subject] and "lecture" in db[subject][original_chapter]:
-                if isinstance(db[subject][original_chapter]["lecture"], dict):
-                    lect_count = len(db[subject][original_chapter]["lecture"])
-            
-            keyboard = [
-                [InlineKeyboardButton("✅ YES, Delete All Lectures", callback_data=f"execute_delete_all_lectures_{subject}_{encode_chapter_name(original_chapter)}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
-            ]
-            
-            query.edit_message_text(
-                f"⚠️ *CONFIRM DELETION*\n\n"
-                f"📘 *Subject:* {subject.capitalize()}\n"
-                f"📖 *Chapter:* {original_chapter}\n\n"
-                f"🗑️ *Will delete:* All {lect_count} lectures\n\n"
-                f"❌ *This action cannot be undone!*\n\n"
-                f"Are you sure you want to delete all lectures?",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-    
-    elif data.startswith("execute_delete_all_lectures_"):
-        parts = data.replace("execute_delete_all_lectures_", "").split("_", 1)
-        if len(parts) >= 2:
-            subject = parts[0]
-            chapter_encoded = parts[1]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Delete all lectures
-            db = load_db()
-            if subject in db and original_chapter in db[subject] and "lecture" in db[subject][original_chapter]:
-                lect_count = 0
-                if isinstance(db[subject][original_chapter]["lecture"], dict):
-                    lect_count = len(db[subject][original_chapter]["lecture"])
-                
-                del db[subject][original_chapter]["lecture"]
-                save_db(db)
-                
-                query.edit_message_text(
-                    f"✅ *Deleted All Lectures Successfully!*\n\n"
-                    f"📘 *Subject:* {subject.capitalize()}\n"
-                    f"📖 *Chapter:* {original_chapter}\n\n"
-                    f"🗑️ *Deleted:* {lect_count} lectures\n\n"
-                    f"Users will no longer see these lectures.",
-                    parse_mode="Markdown"
-                )
-            else:
-                query.edit_message_text("❌ No lectures found to delete.")
-        
-        # Return to content selection
-        keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
-            get_back_button("delete_menu")
-        ]
-        query.message.reply_text(
-            "What would you like to do next?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    elif data.startswith("delete_lecture_"):
-        parts = data.split("_")
-        if len(parts) >= 5:
-            subject = parts[2]
-            chapter_encoded = parts[3]
-            lecture_no = parts[4]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Confirm deletion of specific lecture
-            keyboard = [
-                [InlineKeyboardButton("✅ YES, Delete Lecture", callback_data=f"execute_delete_lecture_{subject}_{encode_chapter_name(original_chapter)}_{lecture_no}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
-            ]
-            
-            query.edit_message_text(
-                f"⚠️ *CONFIRM DELETION*\n\n"
-                f"📘 *Subject:* {subject.capitalize()}\n"
-                f"📖 *Chapter:* {original_chapter}\n"
-                f"📹 *Lecture No:* {lecture_no}\n\n"
-                f"❌ *This action cannot be undone!*\n\n"
-                f"Are you sure you want to delete this lecture?",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-    
-    elif data.startswith("execute_delete_lecture_"):
-        parts = data.split("_")
-        if len(parts) >= 6:
-            subject = parts[3]
-            chapter_encoded = parts[4]
-            lecture_no = parts[5]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Delete specific lecture
-            db = load_db()
-            if (subject in db and 
-                original_chapter in db[subject] and 
-                "lecture" in db[subject][original_chapter] and
-                isinstance(db[subject][original_chapter]["lecture"], dict) and
-                lecture_no in db[subject][original_chapter]["lecture"]):
-                
-                del db[subject][original_chapter]["lecture"][lecture_no]
-                
-                # If no lectures left, remove lecture key
-                if not db[subject][original_chapter]["lecture"]:
-                    del db[subject][original_chapter]["lecture"]
-                
-                save_db(db)
-                
-                query.edit_message_text(
-                    f"✅ *Lecture Deleted Successfully!*\n\n"
-                    f"📘 *Subject:* {subject.capitalize()}\n"
-                    f"📖 *Chapter:* {original_chapter}\n"
-                    f"📹 *Lecture No:* {lecture_no}\n\n"
-                    f"Users will no longer see this lecture.",
-                    parse_mode="Markdown"
-                )
-            else:
-                query.edit_message_text("❌ Lecture not found.")
-        
-        # Return to content selection
-        keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
-            get_back_button("delete_menu")
-        ]
-        query.message.reply_text(
-            "What would you like to do next?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    elif data.startswith("delete_content_"):
-        # Handle notes and DPP deletion (not lectures)
-        parts = data.split("_")
-        if len(parts) >= 5:
-            subject = parts[2]
-            chapter_encoded = parts[3]
-            content_type = parts[4]  # notes or dpp
-            
-            if content_type == "lecture":
-                return  # Handled separately
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            content_type_names = {
-                "notes": "Notes",
-                "dpp": "DPP"
-            }
-            
-            # Confirm deletion
-            keyboard = [
-                [InlineKeyboardButton(f"✅ YES, Delete {content_type_names.get(content_type, content_type)}", 
-                                     callback_data=f"execute_delete_{content_type}_{subject}_{encode_chapter_name(original_chapter)}")],
-                [InlineKeyboardButton("❌ NO, Cancel", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")]
-            ]
-            
-            query.edit_message_text(
-                f"⚠️ *CONFIRM DELETION*\n\n"
-                f"📘 *Subject:* {subject.capitalize()}\n"
-                f"📖 *Chapter:* {original_chapter}\n"
-                f"📁 *Type:* {content_type_names.get(content_type, content_type)}\n\n"
-                f"❌ *This action cannot be undone!*\n\n"
-                f"Are you sure you want to delete this content?",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-    
-    elif data.startswith("execute_delete_notes_") or data.startswith("execute_delete_dpp_"):
-        parts = data.split("_")
-        if len(parts) >= 5:
-            content_type = parts[2]  # notes or dpp
-            subject = parts[3]
-            chapter_encoded = parts[4]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Delete the content
-            db = load_db()
-            if subject in db and original_chapter in db[subject] and content_type in db[subject][original_chapter]:
-                del db[subject][original_chapter][content_type]
-                save_db(db)
-                
-                content_type_names = {
-                    "notes": "Notes",
-                    "dpp": "DPP"
-                }
-                
-                query.edit_message_text(
-                    f"✅ *{content_type_names.get(content_type, content_type)} Deleted Successfully!*\n\n"
-                    f"📘 *Subject:* {subject.capitalize()}\n"
-                    f"📖 *Chapter:* {original_chapter}\n"
-                    f"📁 *Type:* {content_type_names.get(content_type, content_type)}\n\n"
-                    f"Users will no longer see this content.",
-                    parse_mode="Markdown"
-                )
-            else:
-                query.edit_message_text(f"❌ {content_type.capitalize()} not found.")
-        
-        # Return to content selection
-        keyboard = [
-            [InlineKeyboardButton("📊 View Chapter Contents", callback_data=f"view_chapter_{subject}_{encode_chapter_name(original_chapter)}")],
-            get_back_button("delete_menu")
-        ]
-        query.message.reply_text(
-            "What would you like to do next?",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    elif data == "view_chapter_contents":
-        keyboard = [
-            [InlineKeyboardButton("📘 Physics", callback_data="view_contents_physics")],
-            [InlineKeyboardButton("🧪 Chemistry", callback_data="view_contents_chemistry")],
-            [InlineKeyboardButton("📐 Maths", callback_data="view_contents_maths")],
-            [InlineKeyboardButton("📖 English", callback_data="view_contents_english")],
-            get_back_button("delete_menu")
-        ]
-        query.edit_message_text(
-            "📊 *View Chapter Contents*\n\nSelect subject:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    elif data.startswith("view_contents_"):
-        subject = data.replace("view_contents_", "")
-        db = load_db()
-        
-        if subject not in db or not db[subject]:
-            keyboard = [
-                get_back_button("delete_menu")
-            ]
-            query.edit_message_text(
-                f"📭 No chapters exist for *{subject.capitalize()}*.",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-            return
-        
-        chapters = list(db[subject].keys())
-        chapters.sort()
-        
-        # Show chapters for viewing
-        keyboard = []
-        for ch in chapters:
-            keyboard.append([
-                InlineKeyboardButton(
-                    f"📖 {ch}", 
-                    callback_data=f"view_chapter_{subject}_{encode_chapter_name(ch)}"
-                )
-            ])
-        
-        keyboard.append(get_back_button("delete_menu"))
-        
-        query.edit_message_text(
-            f"📊 *View Contents of {subject.capitalize()}*\n\n"
-            f"Select chapter to view contents:",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        return
-    
-    elif data.startswith("view_chapter_"):
-        parts = data.replace("view_chapter_", "").split("_", 1)
-        if len(parts) >= 2:
-            subject = parts[0]
-            chapter_encoded = parts[1]
-            
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            
-            if not original_chapter:
-                query.edit_message_text("❌ Chapter not found.")
-                return
-            
-            # Show chapter contents
-            db = load_db()
-            content_text = f"📊 *Chapter Contents*\n\n"
-            content_text += f"📘 *Subject:* {subject.capitalize()}\n"
-            content_text += f"📖 *Chapter:* {original_chapter}\n\n"
-            
-            if subject in db and original_chapter in db[subject]:
-                # Lectures
-                if "lecture" in db[subject][original_chapter]:
-                    if isinstance(db[subject][original_chapter]["lecture"], dict):
-                        lecture_numbers = list(db[subject][original_chapter]["lecture"].keys())
-                        lecture_numbers.sort(key=lambda x: int(x) if x.isdigit() else x)
-                        content_text += f"🎥 *Lectures:* {len(lecture_numbers)} lectures\n"
-                        content_text += f"   Numbers: {', '.join(lecture_numbers)}\n"
-                    else:
-                        content_text += "🎥 *Lectures:* 1 lecture\n"
-                
-                # Notes
-                if "notes" in db[subject][original_chapter]:
-                    content_text += "📝 *Notes:* Available ✅\n"
-                else:
-                    content_text += "📝 *Notes:* Not available ❌\n"
-                
-                # DPP
-                if "dpp" in db[subject][original_chapter]:
-                    content_text += "📊 *DPP:* Available ✅\n"
-                else:
-                    content_text += "📊 *DPP:* Not available ❌\n"
-            else:
-                content_text += "📭 *No content available*\n"
-            
-            keyboard = [
-                [InlineKeyboardButton("🗑️ Delete Content from This Chapter", callback_data=f"select_chapter_content_{subject}_{encode_chapter_name(original_chapter)}")],
-                get_back_button("delete_menu")
-            ]
-            
-            query.edit_message_text(
-                content_text,
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-    
     # ============== ADMIN CONTENT MANAGEMENT ==============
     elif data == "admin_select_chapter":
         keyboard = [
@@ -1149,7 +789,7 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # ============== FIXED: Handle selecting existing chapters for a subject ==============
+    # ============== Handle selecting existing chapters for a subject ==============
     elif data.startswith("admin_existing_"):
         subject = data.replace("admin_existing_", "")
         db = load_db()
@@ -1191,7 +831,7 @@ def callback_handler(update: Update, context: CallbackContext):
             
             content_status = " ".join(content_types) if content_types else "📭"
             
-            # FIXED: Use base64 encoding for chapter name
+            # Use base64 encoding for chapter name
             encoded_chapter = encode_chapter_name(ch)
             print(f"🔍 DEBUG: Chapter '{ch}' -> encoded '{encoded_chapter}'")
             
@@ -1214,89 +854,98 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # ============== FIXED: Handle selecting a specific chapter to edit ==============
+    # ============== Handle selecting a specific chapter to edit ==============
     elif data.startswith("admin_edit_"):
+        print(f"🔍 DEBUG: Entering admin_edit_ handler")
+        
+        parts = data.split("_", 2)
+        if len(parts) < 3:
+            query.answer("❌ Invalid callback data", show_alert=True)
+            return
+        
+        subject = parts[1]
+        encoded_chapter = parts[2]
+        
+        print(f"🔍 DEBUG: subject={subject}, encoded_chapter={encoded_chapter}")
+        
+        # Decode chapter name
         try:
-            print(f"🔍 DEBUG admin_edit_: data={data}")
-            parts = data.split("_", 2)
-            if len(parts) < 3:
-                query.answer("❌ Invalid callback data format", show_alert=True)
-                return
-            
-            subject = parts[1]
-            chapter_encoded = parts[2]
-            
-            print(f"🔍 DEBUG: subject={subject}, encoded_chapter={chapter_encoded}")
-            
-            # Decode the chapter name
-            chapter_name = decode_chapter_name(chapter_encoded)
+            chapter_name = decode_chapter_name(encoded_chapter)
             print(f"🔍 DEBUG: decoded chapter='{chapter_name}'")
-            
-            # Find original chapter name
-            original_chapter = find_original_chapter(subject, chapter_encoded)
-            print(f"🔍 DEBUG: original_chapter='{original_chapter}'")
-            
-            if not original_chapter:
-                db = load_db()
-                print(f"🔍 DEBUG: Database: {db.get(subject, {})}")
-                print(f"🔍 DEBUG: Looking for '{chapter_name}' in {list(db.get(subject, {}).keys())}")
-                
-                # Try to match by cleaned name
-                if subject in db:
-                    for ch in db[subject].keys():
-                        if clean_chapter_name(ch) == chapter_encoded:
-                            original_chapter = ch
-                            break
-                
-                if not original_chapter:
-                    query.answer(f"❌ Chapter not found: '{chapter_name}'", show_alert=True)
-                    return
-            
-            admin_state["subject"] = subject
-            admin_state["chapter"] = original_chapter
-            admin_state["step"] = "type"
-            
-            # Show content type selection for this chapter
-            keyboard = [
-                [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_lecture_type")],
-                [InlineKeyboardButton("📝 Notes (PDF)", callback_data="admin_type_notes")],
-                [InlineKeyboardButton("📊 DPP (PDF)", callback_data="admin_type_dpp")],
-                get_back_button("admin_main")
-            ]
-            
-            # Show what's already uploaded
-            db = load_db()
-            existing_content = []
-            if subject in db and original_chapter in db[subject]:
-                if "lecture" in db[subject][original_chapter]:
-                    if isinstance(db[subject][original_chapter]["lecture"], dict):
-                        lect_count = len(db[subject][original_chapter]["lecture"])
-                        existing_content.append(f"🎥 {lect_count} Lectures")
-                    else:
-                        existing_content.append("🎥 Lecture")
-                if "notes" in db[subject][original_chapter]:
-                    existing_content.append("📝 Notes")
-                if "dpp" in db[subject][original_chapter]:
-                    existing_content.append("📊 DPP")
-            
-            status_text = ""
-            if existing_content:
-                status_text = f"\n\n✅ *Already uploaded:* {', '.join(existing_content)}"
-            
-            query.edit_message_text(
-                f"📝 *Adding content to:*\n"
-                f"📘 *Subject:* {subject.capitalize()}\n"
-                f"📖 *Chapter:* {original_chapter}\n\n"
-                f"Select content type to upload:{status_text}",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
         except Exception as e:
-            print(f"❌ ERROR in admin_edit_: {str(e)}")
+            print(f"❌ Error decoding chapter: {e}")
             query.answer("❌ Error loading chapter", show_alert=True)
+            return
+        
+        # Load database and find chapter
+        db = load_db()
+        
+        if subject not in db:
+            query.answer(f"❌ Subject '{subject}' not found", show_alert=True)
+            return
+        
+        # Find the chapter (try exact match first, then case-insensitive)
+        found_chapter = None
+        for ch in db[subject].keys():
+            if ch == chapter_name:
+                found_chapter = ch
+                break
+        
+        if not found_chapter:
+            # Try case-insensitive match
+            for ch in db[subject].keys():
+                if ch.lower() == chapter_name.lower():
+                    found_chapter = ch
+                    break
+        
+        if not found_chapter:
+            query.answer(f"❌ Chapter '{chapter_name}' not found in {subject}", show_alert=True)
+            return
+        
+        print(f"🔍 DEBUG: Found chapter: '{found_chapter}'")
+        
+        # Store in admin state
+        admin_state["subject"] = subject
+        admin_state["chapter"] = found_chapter
+        admin_state["step"] = "type"
+        
+        # Show content type selection
+        keyboard = [
+            [InlineKeyboardButton("🎥 Lecture (MP4)", callback_data="admin_lecture_type")],
+            [InlineKeyboardButton("📝 Notes (PDF)", callback_data="admin_type_notes")],
+            [InlineKeyboardButton("📊 DPP (PDF)", callback_data="admin_type_dpp")],
+            get_back_button("admin_main")
+        ]
+        
+        # Check existing content
+        existing_content = []
+        if subject in db and found_chapter in db[subject]:
+            if "lecture" in db[subject][found_chapter]:
+                if isinstance(db[subject][found_chapter]["lecture"], dict):
+                    lect_count = len(db[subject][found_chapter]["lecture"])
+                    existing_content.append(f"🎥 {lect_count} Lectures")
+                else:
+                    existing_content.append("🎥 Lecture")
+            if "notes" in db[subject][found_chapter]:
+                existing_content.append("📝 Notes")
+            if "dpp" in db[subject][found_chapter]:
+                existing_content.append("📊 DPP")
+        
+        status_text = ""
+        if existing_content:
+            status_text = f"\n\n✅ *Already uploaded:* {', '.join(existing_content)}"
+        
+        query.edit_message_text(
+            f"📝 *Adding content to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {found_chapter}\n\n"
+            f"Select content type to upload:{status_text}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
-
-    # Handle lecture type selection
+    
+    # ============== Handle admin content type selection ==============
     elif data == "admin_lecture_type":
         admin_state["step"] = "lecture_no"
         
@@ -1339,6 +988,50 @@ def callback_handler(update: Update, context: CallbackContext):
             f"📘 *Subject:* {subject.capitalize()}\n"
             f"📖 *Chapter:* {chapter}\n\n"
             f"Select lecture number or add new:{status_text}",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    elif data == "admin_type_notes":
+        admin_state["ctype"] = "notes"
+        admin_state["step"] = "upload"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        keyboard = [
+            get_back_button("admin_main"),
+            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+        ]
+        
+        query.edit_message_text(
+            f"⬆️ *Uploading to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"*Upload Notes PDF:*\n\nPlease send the PDF file now:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    elif data == "admin_type_dpp":
+        admin_state["ctype"] = "dpp"
+        admin_state["step"] = "upload"
+        
+        subject = admin_state.get("subject", "Unknown")
+        chapter = admin_state.get("chapter", "Unknown")
+        
+        keyboard = [
+            get_back_button("admin_main"),
+            [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
+        ]
+        
+        query.edit_message_text(
+            f"⬆️ *Uploading to:*\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter}\n\n"
+            f"*Upload DPP PDF:*\n\nPlease send the PDF file now:",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -1420,7 +1113,7 @@ def callback_handler(update: Update, context: CallbackContext):
         return
 
     # Exit admin mode from callback
-    if data == "exit_admin_mode":
+    elif data == "exit_admin_mode":
         admin_state.clear()
         query.edit_message_text(
             "✅ *Exited Admin Mode*\n\nUse /start to browse content.",
@@ -1566,7 +1259,7 @@ def callback_handler(update: Update, context: CallbackContext):
                 )
         return
     
-    # ============== USER CHAPTER SELECTION - FIXED ==============
+    # ============== USER CHAPTER SELECTION ==============
     elif data.startswith("user_ch_"):
         try:
             parts = data.split("_")
@@ -1694,39 +1387,6 @@ def callback_handler(update: Update, context: CallbackContext):
                 parse_mode="Markdown"
             )
         return
-
-def admin_type(update: Update, context: CallbackContext):
-    query = update.callback_query
-    data = query.data
-    query.answer()
-    
-    if data == "admin_type_notes":
-        admin_state["ctype"] = "notes"
-        admin_state["step"] = "upload"
-        show_upload_prompt(query, "Notes PDF (PDF)")
-        
-    elif data == "admin_type_dpp":
-        admin_state["ctype"] = "dpp"
-        admin_state["step"] = "upload"
-        show_upload_prompt(query, "DPP PDF (PDF)")
-
-def show_upload_prompt(query, content_type_name):
-    subject = admin_state.get("subject", "Unknown")
-    chapter = admin_state.get("chapter", "Unknown")
-    
-    keyboard = [
-        get_back_button("admin_main"),
-        [InlineKeyboardButton("❌ Cancel & Exit", callback_data="exit_admin_mode")]
-    ]
-    
-    query.edit_message_text(
-        f"⬆️ *Uploading to:*\n"
-        f"📘 *Subject:* {subject.capitalize()}\n"
-        f"📖 *Chapter:* {chapter}\n\n"
-        f"*Upload {content_type_name}:*\n\nPlease send the file now:",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
 
 def message_handler(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
@@ -1949,7 +1609,7 @@ def main():
     dp.add_handler(CommandHandler("vishal", admin))
     dp.add_handler(CommandHandler("out", out))
     
-    dp.add_handler(CallbackQueryHandler(admin_type, pattern="^admin_type_"))
+    # Only one callback handler needed - all callbacks are handled in callback_handler
     dp.add_handler(CallbackQueryHandler(callback_handler))
     
     dp.add_handler(MessageHandler(Filters.all, message_handler))
