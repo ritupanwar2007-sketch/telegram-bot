@@ -158,18 +158,40 @@ def chapter_command(update: Update, context: CallbackContext):
         update.message.reply_text(
             "📭 *No chapters found*\n\n"
             "No subjects or chapters have been added yet.\n\n"
-            "Use `/chapter <chapter_name>` to add a new chapter,\n"
+            "Use `/chapter <subject> <chapter_name>` to add a new chapter,\n"
             "or use the admin panel with `/vishal`",
             parse_mode="Markdown"
         )
         return
     
-    # Check if a specific chapter was mentioned
+    # Check if arguments were provided
     if context.args:
-        chapter_name = " ".join(context.args)
-        return show_chapter_details(update, context, chapter_name)
+        args = context.args
+        
+        if len(args) == 1:
+            # Only chapter name provided, ask for subject
+            chapter_name = args[0]
+            return ask_for_subject(update, chapter_name)
+        elif len(args) >= 2:
+            # Both subject and chapter name provided
+            subject = args[0].lower()
+            chapter_name = " ".join(args[1:])
+            
+            # Validate subject
+            valid_subjects = ["physics", "chemistry", "maths", "english"]
+            if subject not in valid_subjects:
+                update.message.reply_text(
+                    f"❌ *Invalid Subject*\n\n"
+                    f"Available subjects: Physics, Chemistry, Maths, English\n\n"
+                    f"Usage: `/chapter <subject> <chapter_name>`\n"
+                    f"Example: `/chapter physics Motion in a Straight Line`",
+                    parse_mode="Markdown"
+                )
+                return
+            
+            return show_chapter_details(update, context, subject, chapter_name)
     
-    # Show all chapters grouped by subject
+    # No arguments: show all chapters grouped by subject
     message = "📚 *All Chapters*\n\n"
     
     for subject in sorted(db.keys()):
@@ -195,7 +217,8 @@ def chapter_command(update: Update, context: CallbackContext):
         message += "\n"
     
     message += "\n*Commands:*\n"
-    message += "• `/chapter <name>` - View/Add to specific chapter\n"
+    message += "• `/chapter <chapter_name>` - Add/View chapter (will ask for subject)\n"
+    message += "• `/chapter <subject> <chapter_name>` - Directly add/view chapter\n"
     message += "• `/vishal` - Open admin panel\n"
     message += "• `/out` - Exit admin mode"
     
@@ -210,44 +233,68 @@ def chapter_command(update: Update, context: CallbackContext):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-def show_chapter_details(update: Update, context: CallbackContext, chapter_name):
+def ask_for_subject(update: Update, chapter_name):
+    """Ask admin to select a subject for the new chapter"""
+    keyboard = [
+        [InlineKeyboardButton("📘 Physics", callback_data=f"new_chapter_subject_physics_{chapter_name}")],
+        [InlineKeyboardButton("🧪 Chemistry", callback_data=f"new_chapter_subject_chemistry_{chapter_name}")],
+        [InlineKeyboardButton("📐 Maths", callback_data=f"new_chapter_subject_maths_{chapter_name}")],
+        [InlineKeyboardButton("📖 English", callback_data=f"new_chapter_subject_english_{chapter_name}")],
+        [InlineKeyboardButton("❌ Cancel", callback_data="back_to_admin_main")]
+    ]
+    
+    update.message.reply_text(
+        f"📝 *Select Subject for New Chapter*\n\n"
+        f"Chapter Name: *{chapter_name}*\n\n"
+        f"Please select a subject:",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+def show_chapter_details(update: Update, context: CallbackContext, subject, chapter_name):
     """Show details of a specific chapter and options to add content"""
     db = load_db()
     
-    # Search for chapter across all subjects
-    found_subject = None
-    found_chapter = None
+    # Check if chapter exists in the specified subject
+    chapter_exists = False
+    exact_chapter_name = None
     
-    for subject in db.keys():
-        for ch in db[subject].keys():
-            if ch.lower() == chapter_name.lower():
-                found_subject = subject
-                found_chapter = ch
-                break
-        if found_chapter:
-            break
+    if subject in db:
+        # Check for exact match first
+        if chapter_name in db[subject]:
+            chapter_exists = True
+            exact_chapter_name = chapter_name
+        else:
+            # Check for case-insensitive match
+            for ch in db[subject].keys():
+                if ch.lower() == chapter_name.lower():
+                    chapter_exists = True
+                    exact_chapter_name = ch
+                    break
     
-    if not found_chapter:
-        # Chapter not found, ask which subject to add it to
+    if not chapter_exists:
+        # Chapter doesn't exist, ask for confirmation to create it
+        encoded_chapter = encode_chapter_name(chapter_name)
         keyboard = [
-            [InlineKeyboardButton("📘 Physics", callback_data=f"add_new_chapter_physics_{chapter_name}")],
-            [InlineKeyboardButton("🧪 Chemistry", callback_data=f"add_new_chapter_chemistry_{chapter_name}")],
-            [InlineKeyboardButton("📐 Maths", callback_data=f"add_new_chapter_maths_{chapter_name}")],
-            [InlineKeyboardButton("📖 English", callback_data=f"add_new_chapter_english_{chapter_name}")],
+            [InlineKeyboardButton(f"✅ Yes, Create in {subject.capitalize()}", 
+                                 callback_data=f"confirm_create_chapter_{subject}_{encoded_chapter}")],
+            [InlineKeyboardButton("🔄 Change Subject", 
+                                 callback_data=f"ask_subject_for_{encoded_chapter}")],
             [InlineKeyboardButton("❌ Cancel", callback_data="back_to_admin_main")]
         ]
         
         update.message.reply_text(
-            f"📝 *Chapter Not Found*\n\n"
-            f"Chapter *{chapter_name}* doesn't exist yet.\n\n"
-            f"Select a subject to add it to:",
+            f"📝 *Create New Chapter*\n\n"
+            f"📘 *Subject:* {subject.capitalize()}\n"
+            f"📖 *Chapter:* {chapter_name}\n\n"
+            f"Chapter doesn't exist yet. Create it in {subject.capitalize()}?",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
     
-    # Chapter found, show details and options
-    chapter_data = db[found_subject][found_chapter]
+    # Chapter exists, show details and options
+    chapter_data = db[subject][exact_chapter_name]
     
     # Build content summary
     content_summary = []
@@ -267,8 +314,8 @@ def show_chapter_details(update: Update, context: CallbackContext, chapter_name)
     # Prepare message
     message = (
         f"📚 *Chapter Details*\n\n"
-        f"📘 *Subject:* {found_subject.capitalize()}\n"
-        f"📖 *Chapter:* {found_chapter}\n"
+        f"📘 *Subject:* {subject.capitalize()}\n"
+        f"📖 *Chapter:* {exact_chapter_name}\n"
         f"📦 *Content:* {content_text}\n\n"
         f"*Options:*"
     )
@@ -276,17 +323,19 @@ def show_chapter_details(update: Update, context: CallbackContext, chapter_name)
     # Prepare keyboard
     keyboard = []
     
+    encoded_chapter = encode_chapter_name(exact_chapter_name)
+    
     # Add content buttons
-    keyboard.append([InlineKeyboardButton("🎥 Add Lecture", callback_data=f"quick_add_lecture_{found_subject}_{encode_chapter_name(found_chapter)}")])
-    keyboard.append([InlineKeyboardButton("📝 Add Notes", callback_data=f"quick_add_notes_{found_subject}_{encode_chapter_name(found_chapter)}")])
-    keyboard.append([InlineKeyboardButton("📊 Add DPP", callback_data=f"quick_add_dpp_{found_subject}_{encode_chapter_name(found_chapter)}")])
+    keyboard.append([InlineKeyboardButton("🎥 Add Lecture", callback_data=f"quick_add_lecture_{subject}_{encoded_chapter}")])
+    keyboard.append([InlineKeyboardButton("📝 Add Notes", callback_data=f"quick_add_notes_{subject}_{encoded_chapter}")])
+    keyboard.append([InlineKeyboardButton("📊 Add DPP", callback_data=f"quick_add_dpp_{subject}_{encoded_chapter}")])
     
     # View existing content
     if content_summary:
-        keyboard.append([InlineKeyboardButton("👁️ View Content", callback_data=f"view_chapter_content_{found_subject}_{encode_chapter_name(found_chapter)}")])
+        keyboard.append([InlineKeyboardButton("👁️ View Content", callback_data=f"view_chapter_content_{subject}_{encoded_chapter}")])
     
     # Delete option
-    keyboard.append([InlineKeyboardButton("🗑️ Delete Chapter", callback_data=f"delete_chapter_quick_{found_subject}_{encode_chapter_name(found_chapter)}")])
+    keyboard.append([InlineKeyboardButton("🗑️ Delete Chapter", callback_data=f"delete_chapter_quick_{subject}_{encoded_chapter}")])
     
     # Navigation
     keyboard.append([InlineKeyboardButton("🔙 Back to All Chapters", callback_data="back_to_chapters_list")])
@@ -385,6 +434,63 @@ def get_back_button(back_to, data=None):
 # Global admin state
 admin_state = {}
 
+def show_chapter_callback(query, subject, chapter_name):
+    """Show chapter details in callback query"""
+    db = load_db()
+    
+    # Make sure chapter exists
+    if subject not in db or chapter_name not in db[subject]:
+        # Create it if it doesn't exist
+        if subject not in db:
+            db[subject] = {}
+        db[subject][chapter_name] = {}
+        save_db(db)
+    
+    chapter_data = db[subject][chapter_name]
+    
+    # Build content summary
+    content_summary = []
+    if "lecture" in chapter_data:
+        if isinstance(chapter_data["lecture"], dict):
+            lect_count = len(chapter_data["lecture"])
+            content_summary.append(f"🎥 {lect_count} lecture(s)")
+        else:
+            content_summary.append("🎥 1 lecture")
+    if "notes" in chapter_data:
+        content_summary.append("📝 Notes")
+    if "dpp" in chapter_data:
+        content_summary.append("📊 DPP")
+    
+    content_text = " | ".join(content_summary) if content_summary else "No content yet"
+    
+    encoded_chapter = encode_chapter_name(chapter_name)
+    
+    message = (
+        f"📚 *Chapter Details*\n\n"
+        f"📘 *Subject:* {subject.capitalize()}\n"
+        f"📖 *Chapter:* {chapter_name}\n"
+        f"📦 *Content:* {content_text}\n\n"
+        f"*Options:*"
+    )
+    
+    keyboard = []
+    keyboard.append([InlineKeyboardButton("🎥 Add Lecture", callback_data=f"quick_add_lecture_{subject}_{encoded_chapter}")])
+    keyboard.append([InlineKeyboardButton("📝 Add Notes", callback_data=f"quick_add_notes_{subject}_{encoded_chapter}")])
+    keyboard.append([InlineKeyboardButton("📊 Add DPP", callback_data=f"quick_add_dpp_{subject}_{encoded_chapter}")])
+    
+    if content_summary:
+        keyboard.append([InlineKeyboardButton("👁️ View Content", callback_data=f"view_chapter_content_{subject}_{encoded_chapter}")])
+    
+    keyboard.append([InlineKeyboardButton("🗑️ Delete Chapter", callback_data=f"delete_chapter_quick_{subject}_{encoded_chapter}")])
+    keyboard.append([InlineKeyboardButton("🔙 Back to All Chapters", callback_data="back_to_chapters_list")])
+    keyboard.append([InlineKeyboardButton("📋 Admin Panel", callback_data="back_to_admin_main")])
+    
+    query.edit_message_text(
+        message,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
 def callback_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     data = query.data
@@ -392,8 +498,66 @@ def callback_handler(update: Update, context: CallbackContext):
 
     print(f"🔍 DEBUG: Callback data received: {data}")
 
+    # ============== NEW: Subject Selection for Chapter Creation ==============
+    elif data.startswith("new_chapter_subject_"):
+        # Format: new_chapter_subject_physics_ChapterName
+        parts = data.split("_", 4)
+        if len(parts) >= 5:
+            subject = parts[3]
+            chapter_name = parts[4]
+            
+            # Show chapter details
+            show_chapter_callback(query, subject, chapter_name)
+        return
+    
+    elif data.startswith("ask_subject_for_"):
+        # User wants to change subject for chapter creation
+        encoded_chapter = data.replace("ask_subject_for_", "")
+        chapter_name = decode_chapter_name(encoded_chapter)
+        
+        keyboard = [
+            [InlineKeyboardButton("📘 Physics", callback_data=f"new_chapter_subject_physics_{chapter_name}")],
+            [InlineKeyboardButton("🧪 Chemistry", callback_data=f"new_chapter_subject_chemistry_{chapter_name}")],
+            [InlineKeyboardButton("📐 Maths", callback_data=f"new_chapter_subject_maths_{chapter_name}")],
+            [InlineKeyboardButton("📖 English", callback_data=f"new_chapter_subject_english_{chapter_name}")],
+            [InlineKeyboardButton("❌ Cancel", callback_data="back_to_admin_main")]
+        ]
+        
+        query.edit_message_text(
+            f"📝 *Select Subject for New Chapter*\n\n"
+            f"Chapter Name: *{chapter_name}*\n\n"
+            f"Please select a subject:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    elif data.startswith("confirm_create_chapter_"):
+        # Format: confirm_create_chapter_subject_encodedChapterName
+        parts = data.split("_", 3)
+        if len(parts) >= 4:
+            subject = parts[2]
+            encoded_chapter = parts[3]
+            
+            chapter_name = decode_chapter_name(encoded_chapter)
+            
+            # Create the chapter in database
+            db = load_db()
+            if subject not in db:
+                db[subject] = {}
+            
+            if chapter_name not in db[subject]:
+                db[subject][chapter_name] = {}
+                save_db(db)
+                
+                query.answer(f"✅ Chapter '{chapter_name}' created in {subject}", show_alert=True)
+            
+            # Now show the chapter details
+            show_chapter_callback(query, subject, chapter_name)
+        return
+
     # ============== NEW: Quick Chapter Management ==============
-    if data == "back_to_chapters_list":
+    elif data == "back_to_chapters_list":
         # Simulate /chapter command
         db = load_db()
         
@@ -439,28 +603,6 @@ def callback_handler(update: Update, context: CallbackContext):
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
-        return
-    
-    elif data.startswith("add_new_chapter_"):
-        # Format: add_new_chapter_subject_chapterName
-        parts = data.split("_", 4)
-        if len(parts) >= 5:
-            subject = parts[3]
-            chapter_name = parts[4]
-            
-            # Add chapter to database
-            db = load_db()
-            if subject not in db:
-                db[subject] = {}
-            
-            if chapter_name not in db[subject]:
-                db[subject][chapter_name] = {}
-                save_db(db)
-                
-                query.answer(f"✅ Chapter '{chapter_name}' added to {subject}", show_alert=True)
-            
-            # Now show the chapter details
-            show_chapter_callback(query, subject, chapter_name)
         return
     
     elif data.startswith("quick_add_lecture_"):
@@ -694,7 +836,7 @@ def callback_handler(update: Update, context: CallbackContext):
         return
     
     # ============== BACK BUTTON HANDLERS ==============
-    if data == "back_subjects":
+    elif data == "back_subjects":
         query.edit_message_text(
             "📚 *Choose Subject:*",
             parse_mode="Markdown",
@@ -1016,55 +1158,8 @@ def callback_handler(update: Update, context: CallbackContext):
         )
         return
 
-    # ... (rest of your existing callback handlers remain the same)
-
-def show_chapter_callback(query, subject, chapter_name):
-    """Show chapter details in callback query"""
-    db = load_db()
-    chapter_data = db[subject][chapter_name]
-    
-    # Build content summary
-    content_summary = []
-    if "lecture" in chapter_data:
-        if isinstance(chapter_data["lecture"], dict):
-            lect_count = len(chapter_data["lecture"])
-            content_summary.append(f"🎥 {lect_count} lecture(s)")
-        else:
-            content_summary.append("🎥 1 lecture")
-    if "notes" in chapter_data:
-        content_summary.append("📝 Notes")
-    if "dpp" in chapter_data:
-        content_summary.append("📊 DPP")
-    
-    content_text = " | ".join(content_summary) if content_summary else "No content yet"
-    
-    encoded_chapter = encode_chapter_name(chapter_name)
-    
-    message = (
-        f"📚 *Chapter Details*\n\n"
-        f"📘 *Subject:* {subject.capitalize()}\n"
-        f"📖 *Chapter:* {chapter_name}\n"
-        f"📦 *Content:* {content_text}\n\n"
-        f"*Options:*"
-    )
-    
-    keyboard = []
-    keyboard.append([InlineKeyboardButton("🎥 Add Lecture", callback_data=f"quick_add_lecture_{subject}_{encoded_chapter}")])
-    keyboard.append([InlineKeyboardButton("📝 Add Notes", callback_data=f"quick_add_notes_{subject}_{encoded_chapter}")])
-    keyboard.append([InlineKeyboardButton("📊 Add DPP", callback_data=f"quick_add_dpp_{subject}_{encoded_chapter}")])
-    
-    if content_summary:
-        keyboard.append([InlineKeyboardButton("👁️ View Content", callback_data=f"view_chapter_content_{subject}_{encoded_chapter}")])
-    
-    keyboard.append([InlineKeyboardButton("🗑️ Delete Chapter", callback_data=f"delete_chapter_quick_{subject}_{encoded_chapter}")])
-    keyboard.append([InlineKeyboardButton("🔙 Back to All Chapters", callback_data="back_to_chapters_list")])
-    keyboard.append([InlineKeyboardButton("📋 Admin Panel", callback_data="back_to_admin_main")])
-    
-    query.edit_message_text(
-        message,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    # ============== (Rest of your existing callback handlers) ==============
+    # ... [Your existing callback handlers for user access, delete mode, etc.]
 
 def message_handler(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
@@ -1292,6 +1387,9 @@ def main():
     print("✅ Uploaded content is visible to ALL users")
     print("🔔 Users will get notifications for new content")
     print("📚 NEW: /chapter command for quick chapter management")
+    print("   • `/chapter` - Show all chapters")
+    print("   • `/chapter <chapter_name>` - Ask for subject, then create/view")
+    print("   • `/chapter <subject> <chapter_name>` - Direct create/view")
     print("🗑️ Admin can delete chapters and content")
     print("📹 Multiple lectures per chapter with lecture numbers")
     print("📁 Admin can select existing chapters to add more content")
