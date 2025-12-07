@@ -185,7 +185,7 @@ bot.use(async (ctx, next) => {
 
 bot.use(session());
 
-// Keyboards (keep as before)
+// Keyboards
 const languageKeyboard = Markup.keyboard([
     ['🇮🇳 Hindi', '🇬🇧 English']
 ]).resize();
@@ -223,7 +223,7 @@ const adminKeyboard = Markup.keyboard([
     ['🏠 Main Menu']
 ]).resize();
 
-// Enhanced Start Command with error handling
+// Start Command with error handling
 bot.start(async (ctx) => {
     try {
         const user = ctx.user;
@@ -270,9 +270,6 @@ bot.hears(['🇮🇳 Hindi', '🇬🇧 English'], async (ctx) => {
     }
 });
 
-// [Rest of your existing handlers remain the same, but wrap each in try-catch]
-// For brevity, I'll show the pattern for one more handler:
-
 // Stream Selection with error handling
 bot.hears(['Non-Medical', 'Medical', 'Commerce'], async (ctx) => {
     try {
@@ -309,11 +306,625 @@ bot.hears(['Non-Medical', 'Medical', 'Commerce'], async (ctx) => {
     }
 });
 
-// IMPORTANT: Wrap all your existing handlers in try-catch blocks
-// Follow the same pattern for all handlers like:
-// bot.hears(...) → wrap in try-catch
-// bot.action(...) → wrap in try-catch
-// bot.on(...) → wrap in try-catch
+// Subject Selection Handler with error handling
+const subjects = {
+    'Non-Medical': ['Mathematics', 'Physics', 'Chemistry', 'English'],
+    'Medical': ['Biology', 'Chemistry', 'Physics', 'English'],
+    'Commerce': ['Accountancy', 'Business Studies', 'Economics', 'English', 'Mathematics', 'Physical Education', 'Entrepreneurship']
+};
+
+bot.hears([...subjects['Non-Medical'], ...subjects['Medical'], ...subjects['Commerce']], async (ctx) => {
+    try {
+        const user = ctx.user;
+        const subject = ctx.message.text;
+        
+        if (!user.stream || !subjects[user.stream]?.includes(subject)) {
+            await ctx.reply('❌ Please select a valid subject for your stream.');
+            return;
+        }
+        
+        user.subject = subject;
+        await user.save();
+        
+        const chapters = await Chapter.find({ stream: user.stream, subject: subject });
+        
+        if (chapters.length === 0) {
+            const message = user.language === 'hindi'
+                ? `📖 आपने **${subject}** चुना है।\n\n⚠️ अभी तक कोई अध्याय उपलब्ध नहीं है। कृपया बाद में पुनः प्रयास करें।`
+                : `📖 You have selected **${subject}**.\n\n⚠️ No chapters are available yet. Please check back later.`;
+            await ctx.reply(message, { parse_mode: 'Markdown' });
+            return;
+        }
+        
+        const chapterButtons = chapters.map(chapter => 
+            [Markup.button.callback(chapter.chapterName, `chapter_${chapter._id}`)]
+        );
+        chapterButtons.push([Markup.button.callback('◀️ Back to Subjects', 'back_to_subjects')]);
+        
+        const chapterKeyboard = Markup.inlineKeyboard(chapterButtons);
+        
+        const message = user.language === 'hindi'
+            ? `📖 आपने **${subject}** चुना है।\n\n📚 कृपया अध्याय चुनें:`
+            : `📖 You have selected **${subject}**.\n\n📚 Please choose a chapter:`;
+        
+        await ctx.reply(message, { parse_mode: 'Markdown', reply_markup: chapterKeyboard });
+    } catch (error) {
+        console.error('❌ Subject selection error:', error);
+        await ctx.reply('❌ Error processing subject selection. Please try again.');
+    }
+});
+
+// Chapter Selection with error handling
+bot.action(/chapter_(.+)/, async (ctx) => {
+    try {
+        const chapterId = ctx.match[1];
+        const user = ctx.user;
+        
+        const chapter = await Chapter.findById(chapterId);
+        if (!chapter) {
+            await ctx.answerCbQuery('❌ Chapter not found');
+            return;
+        }
+        
+        user.currentChapter = chapterId;
+        await user.save();
+        
+        const message = user.language === 'hindi'
+            ? `📚 आपने **"${chapter.chapterName}"** चुना है।\n\n🎯 कृपया कंटेंट टाइप चुनें:`
+            : `📚 You have selected **"${chapter.chapterName}"**.\n\n🎯 Please choose content type:`;
+        
+        await ctx.editMessageText(message, {
+            parse_mode: 'Markdown',
+            reply_markup: contentTypeKeyboard.reply_markup
+        });
+        
+        await ctx.answerCbQuery();
+    } catch (error) {
+        console.error('❌ Chapter selection error:', error);
+        try {
+            await ctx.answerCbQuery('❌ Error selecting chapter');
+            await ctx.reply('❌ Error selecting chapter. Please try again.');
+        } catch (e) {
+            // Ignore if we can't send error
+        }
+    }
+});
+
+// Back to Subjects with error handling
+bot.action('back_to_subjects', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.stream) {
+            await ctx.answerCbQuery('❌ Please select stream first');
+            return;
+        }
+        
+        let keyboard;
+        if (user.stream === 'Non-Medical') {
+            keyboard = nonMedicalSubjects;
+        } else if (user.stream === 'Medical') {
+            keyboard = medicalSubjects;
+        } else {
+            keyboard = commerceSubjects;
+        }
+        
+        const message = user.language === 'hindi'
+            ? '📚 कृपया विषय चुनें:'
+            : '📚 Please choose your subject:';
+        
+        await ctx.editMessageText(message, {
+            reply_markup: keyboard.reply_markup
+        });
+        
+        await ctx.answerCbQuery();
+    } catch (error) {
+        console.error('❌ Back to subjects error:', error);
+        try {
+            await ctx.answerCbQuery('❌ Error');
+            await ctx.reply('❌ Error. Please try again.');
+        } catch (e) {
+            // Ignore if we can't send error
+        }
+    }
+});
+
+// Content Type Selection with error handling
+bot.hears(['📹 Lecture (MP4)', '📝 DPP', '📘 Notes (PDF)'], async (ctx) => {
+    try {
+        const user = ctx.user;
+        const contentType = ctx.message.text.includes('Lecture') ? 'lecture' 
+            : ctx.message.text.includes('DPP') ? 'dpp' 
+            : 'notes';
+        
+        if (!user.currentChapter) {
+            await ctx.reply('❌ Please select a chapter first.');
+            return;
+        }
+        
+        const contents = await Content.find({
+            chapterId: user.currentChapter,
+            contentType: contentType
+        }).populate('chapterId');
+        
+        if (contents.length === 0) {
+            const message = user.language === 'hindi'
+                ? `⚠️ इस अध्याय के लिए ${contentType} उपलब्ध नहीं है।`
+                : `⚠️ No ${contentType} available for this chapter yet.`;
+            await ctx.reply(message);
+            return;
+        }
+        
+        for (const content of contents) {
+            try {
+                if (contentType === 'lecture') {
+                    await ctx.replyWithVideo(content.fileId, {
+                        caption: content.caption || `🎬 Lecture: ${content.chapterId.chapterName}`,
+                        parse_mode: 'Markdown'
+                    });
+                } else {
+                    await ctx.replyWithDocument(content.fileId, {
+                        caption: content.caption || `📄 ${contentType.toUpperCase()}: ${content.chapterId.chapterName}`,
+                        parse_mode: 'Markdown'
+                    });
+                }
+            } catch (error) {
+                console.error('Error sending file:', error);
+                await ctx.reply('❌ Error sending file. Please try again.');
+            }
+        }
+        
+        await ctx.reply('Select another content type or go back:', {
+            reply_markup: contentTypeKeyboard.reply_markup
+        });
+    } catch (error) {
+        console.error('❌ Content type selection error:', error);
+        await ctx.reply('❌ Error loading content. Please try again.');
+    }
+});
+
+// Back to Chapters with error handling
+bot.hears('◀️ Back to Chapters', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.stream || !user.subject) {
+            await ctx.reply('❌ Please select stream and subject first.');
+            return;
+        }
+        
+        const chapters = await Chapter.find({ stream: user.stream, subject: user.subject });
+        
+        if (chapters.length === 0) {
+            await ctx.reply('📭 No chapters available.');
+            return;
+        }
+        
+        const chapterButtons = chapters.map(chapter => 
+            [Markup.button.callback(chapter.chapterName, `chapter_${chapter._id}`)]
+        );
+        
+        const chapterKeyboard = Markup.inlineKeyboard(chapterButtons);
+        
+        await ctx.reply('📚 Please choose a chapter:', { reply_markup: chapterKeyboard });
+    } catch (error) {
+        console.error('❌ Back to chapters error:', error);
+        await ctx.reply('❌ Error loading chapters. Please try again.');
+    }
+});
+
+// Admin Panel with error handling
+bot.command('admin', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.isAdmin) {
+            await ctx.reply('🚫 You are not authorized to access admin panel.');
+            return;
+        }
+        
+        await ctx.reply('🔧 **Admin Panel**', { 
+            parse_mode: 'Markdown',
+            reply_markup: adminKeyboard.reply_markup 
+        });
+    } catch (error) {
+        console.error('❌ Admin command error:', error);
+        await ctx.reply('❌ Error accessing admin panel.');
+    }
+});
+
+// Admin: Add Chapter with error handling
+bot.hears('➕ Add Chapter', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.isAdmin) return;
+        
+        ctx.session = { ...ctx.session, adminAction: 'add_chapter_step1' };
+        await ctx.reply('📝 Please select stream:', { reply_markup: streamKeyboard.reply_markup });
+    } catch (error) {
+        console.error('❌ Add chapter error:', error);
+        await ctx.reply('❌ Error. Please try again.');
+    }
+});
+
+// Handle admin stream selection with error handling
+bot.hears(['Non-Medical', 'Medical', 'Commerce'], async (ctx) => {
+    try {
+        const user = ctx.user;
+        const session = ctx.session;
+        
+        if (!user.isAdmin || !session?.adminAction) return;
+        
+        if (session.adminAction === 'add_chapter_step1') {
+            session.stream = ctx.message.text;
+            session.adminAction = 'add_chapter_step2';
+            
+            let keyboard;
+            if (session.stream === 'Non-Medical') {
+                keyboard = nonMedicalSubjects;
+            } else if (session.stream === 'Medical') {
+                keyboard = medicalSubjects;
+            } else {
+                keyboard = commerceSubjects;
+            }
+            
+            await ctx.reply(`📁 Stream: **${session.stream}**\n\n📚 Please select subject:`, {
+                parse_mode: 'Markdown',
+                reply_markup: keyboard.reply_markup
+            });
+        }
+    } catch (error) {
+        console.error('❌ Admin stream selection error:', error);
+        await ctx.reply('❌ Error. Please try again.');
+    }
+});
+
+// Handle admin subject selection with error handling
+bot.hears([...subjects['Non-Medical'], ...subjects['Medical'], ...subjects['Commerce']], async (ctx) => {
+    try {
+        const user = ctx.user;
+        const session = ctx.session;
+        
+        if (!user.isAdmin || !session?.adminAction || session.adminAction !== 'add_chapter_step2') return;
+        
+        session.subject = ctx.message.text;
+        session.adminAction = 'add_chapter_step3';
+        
+        await ctx.reply(`📁 Stream: **${session.stream}**\n📚 Subject: **${session.subject}**\n\n📝 Please enter chapter name:`, {
+            parse_mode: 'Markdown',
+            reply_markup: { remove_keyboard: true }
+        });
+    } catch (error) {
+        console.error('❌ Admin subject selection error:', error);
+        await ctx.reply('❌ Error. Please try again.');
+    }
+});
+
+// Handle chapter name input with error handling
+bot.on('text', async (ctx) => {
+    try {
+        const user = ctx.user;
+        const session = ctx.session;
+        const text = ctx.message.text;
+        
+        if (user.isAdmin && session?.adminAction === 'add_chapter_step3') {
+            const chapter = new Chapter({
+                stream: session.stream,
+                subject: session.subject,
+                chapterName: text,
+                addedBy: user.telegramId
+            });
+            
+            await chapter.save();
+            
+            await ctx.reply(`✅ Chapter **"${text}"** added successfully to ${session.stream} > ${session.subject}!`, {
+                parse_mode: 'Markdown',
+                reply_markup: adminKeyboard.reply_markup
+            });
+            
+            ctx.session = {};
+        }
+    } catch (error) {
+        console.error('❌ Chapter creation error:', error);
+        await ctx.reply('❌ Error creating chapter. Please try again.');
+    }
+});
+
+// Admin: View Chapters with error handling
+bot.hears('📚 View Chapters', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.isAdmin) return;
+        
+        const chapters = await Chapter.find().sort({ stream: 1, subject: 1 });
+        
+        if (chapters.length === 0) {
+            await ctx.reply('📭 No chapters added yet.');
+            return;
+        }
+        
+        let message = '📚 **All Chapters:**\n\n';
+        let currentStream = '';
+        let currentSubject = '';
+        
+        for (const chapter of chapters) {
+            if (chapter.stream !== currentStream) {
+                currentStream = chapter.stream;
+                currentSubject = '';
+                message += `\n📁 **${currentStream}:**\n`;
+            }
+            
+            if (chapter.subject !== currentSubject) {
+                currentSubject = chapter.subject;
+                message += `  📖 **${currentSubject}:**\n`;
+            }
+            
+            message += `    • ${chapter.chapterName}\n`;
+        }
+        
+        await ctx.reply(message, { 
+            parse_mode: 'Markdown',
+            reply_markup: adminKeyboard.reply_markup 
+        });
+    } catch (error) {
+        console.error('❌ View chapters error:', error);
+        await ctx.reply('❌ Error loading chapters. Please try again.');
+    }
+});
+
+// Admin: Add Content with error handling
+bot.hears('📁 Add Content', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.isAdmin) return;
+        
+        const chapters = await Chapter.find();
+        
+        if (chapters.length === 0) {
+            await ctx.reply('❌ No chapters available. Please add chapters first.');
+            return;
+        }
+        
+        const chapterButtons = chapters.map(chapter => [
+            Markup.button.callback(
+                `${chapter.stream} > ${chapter.subject} > ${chapter.chapterName}`,
+                `admin_content_${chapter._id}`
+            )
+        ]);
+        
+        const keyboard = Markup.inlineKeyboard(chapterButtons);
+        
+        await ctx.reply('📚 Select a chapter to add content:', { reply_markup: keyboard });
+    } catch (error) {
+        console.error('❌ Add content error:', error);
+        await ctx.reply('❌ Error. Please try again.');
+    }
+});
+
+// Handle chapter selection for adding content with error handling
+bot.action(/admin_content_(.+)/, async (ctx) => {
+    try {
+        const chapterId = ctx.match[1];
+        const chapter = await Chapter.findById(chapterId);
+        
+        if (!chapter) {
+            await ctx.answerCbQuery('❌ Chapter not found');
+            return;
+        }
+        
+        ctx.session = {
+            ...ctx.session,
+            adminAction: 'add_content',
+            selectedChapterId: chapterId
+        };
+        
+        await ctx.editMessageText(
+            `✅ Selected: **${chapter.stream} > ${chapter.subject} > ${chapter.chapterName}**\n\n📤 Please send the file:\n• MP4 for lectures\n• PDF for notes/DPP`,
+            {
+                parse_mode: 'Markdown',
+                reply_markup: Markup.inlineKeyboard([
+                    [Markup.button.callback('📹 Lecture', 'content_type_lecture')],
+                    [Markup.button.callback('📝 DPP', 'content_type_dpp')],
+                    [Markup.button.callback('📘 Notes', 'content_type_notes')],
+                    [Markup.button.callback('❌ Cancel', 'cancel_admin_action')]
+                ])
+            }
+        );
+        
+        await ctx.answerCbQuery();
+    } catch (error) {
+        console.error('❌ Admin content selection error:', error);
+        try {
+            await ctx.answerCbQuery('❌ Error');
+            await ctx.reply('❌ Error selecting chapter. Please try again.');
+        } catch (e) {
+            // Ignore if we can't send error
+        }
+    }
+});
+
+// Handle content type selection with error handling
+bot.action(/content_type_(lecture|dpp|notes)/, async (ctx) => {
+    try {
+        const contentType = ctx.match[1];
+        ctx.session.contentType = contentType;
+        
+        await ctx.editMessageText(
+            `📁 Content type: **${contentType}**\n\n📤 Now please send the file:${contentType === 'lecture' ? '\n• Send MP4 video' : '\n• Send PDF file'}`
+        );
+        
+        await ctx.answerCbQuery();
+    } catch (error) {
+        console.error('❌ Content type selection error:', error);
+        try {
+            await ctx.answerCbQuery('❌ Error');
+            await ctx.reply('❌ Error. Please try again.');
+        } catch (e) {
+            // Ignore if we can't send error
+        }
+    }
+});
+
+// Handle file upload with error handling
+bot.on(['video', 'document'], async (ctx) => {
+    try {
+        const user = ctx.user;
+        const session = ctx.session;
+        
+        if (!user.isAdmin || !session?.adminAction === 'add_content' || !session.contentType) return;
+        
+        const file = ctx.message.video || ctx.message.document;
+        const fileId = file.file_id;
+        const fileName = file.file_name || 'untitled';
+        
+        // Validate file type
+        if (session.contentType === 'lecture' && !ctx.message.video) {
+            await ctx.reply('❌ Please send a video file for lectures.');
+            return;
+        }
+        
+        if ((session.contentType === 'dpp' || session.contentType === 'notes') && !ctx.message.document) {
+            await ctx.reply('❌ Please send a PDF file for DPP/Notes.');
+            return;
+        }
+        
+        const content = new Content({
+            chapterId: session.selectedChapterId,
+            contentType: session.contentType,
+            fileId: fileId,
+            fileName: fileName,
+            addedBy: user.telegramId
+        });
+        
+        await content.save();
+        
+        await ctx.reply(`✅ ${session.contentType.toUpperCase()} added successfully!`, {
+            reply_markup: adminKeyboard.reply_markup
+        });
+        
+        ctx.session = {};
+    } catch (error) {
+        console.error('❌ File upload error:', error);
+        await ctx.reply('❌ Error uploading file. Please try again.');
+    }
+});
+
+// Admin: View Users with error handling
+bot.hears('👥 View Users', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (!user.isAdmin) return;
+        
+        const users = await User.find().sort({ createdAt: -1 }).limit(50);
+        
+        let message = '👥 **Recent Users (Last 50):**\n\n';
+        let userCount = 0;
+        let blockedCount = 0;
+        
+        for (const u of users) {
+            userCount++;
+            if (u.isBlocked) blockedCount++;
+            
+            message += `${u.isAdmin ? '👑' : '👤'} **${u.firstName || 'User'}** ${u.username ? `(@${u.username})` : ''}\n`;
+            message += `ID: ${u.telegramId}\n`;
+            message += `Lang: ${u.language} | Stream: ${u.stream || 'Not selected'}\n`;
+            message += `Subj: ${u.subject || 'Not selected'}\n`;
+            message += `Msgs: ${u.messageCount} | ${u.isBlocked ? '🚫 Blocked' : '✅ Active'}\n`;
+            message += `Joined: ${u.createdAt.toLocaleDateString()}\n`;
+            message += '─'.repeat(30) + '\n';
+        }
+        
+        message += `\n📊 **Total:** ${userCount} users | 🚫 **Blocked:** ${blockedCount}`;
+        
+        await ctx.reply(message, { 
+            parse_mode: 'Markdown',
+            reply_markup: adminKeyboard.reply_markup 
+        });
+    } catch (error) {
+        console.error('❌ View users error:', error);
+        await ctx.reply('❌ Error loading users. Please try again.');
+    }
+});
+
+// Cancel admin action with error handling
+bot.action('cancel_admin_action', async (ctx) => {
+    try {
+        ctx.session = {};
+        await ctx.editMessageText('❌ Action cancelled.', {
+            reply_markup: adminKeyboard.reply_markup
+        });
+        await ctx.answerCbQuery();
+    } catch (error) {
+        console.error('❌ Cancel action error:', error);
+        try {
+            await ctx.answerCbQuery('❌ Error');
+        } catch (e) {
+            // Ignore if we can't send error
+        }
+    }
+});
+
+// Main Menu with error handling
+bot.hears('🏠 Main Menu', async (ctx) => {
+    try {
+        const user = ctx.user;
+        
+        if (user.isAdmin) {
+            await ctx.reply('↩️ Returning to main menu...');
+        }
+        
+        user.stream = null;
+        user.subject = null;
+        user.currentChapter = null;
+        await user.save();
+        
+        const message = user.language === 'hindi'
+            ? '🏠 मुख्य मेनू। कृपया अपनी भाषा चुनें:'
+            : '🏠 Main menu. Please choose your language:';
+        
+        await ctx.reply(message, { reply_markup: languageKeyboard.reply_markup });
+    } catch (error) {
+        console.error('❌ Main menu error:', error);
+        await ctx.reply('❌ Error. Please try /start again.');
+    }
+});
+
+// Handle random messages with error handling
+bot.on('text', async (ctx) => {
+    try {
+        const user = ctx.user;
+        const text = ctx.message.text;
+        
+        if (text.startsWith('/') || user.isAdmin) return;
+        
+        if (!user.language) {
+            await ctx.reply('🌐 Please select your language first.', {
+                reply_markup: languageKeyboard.reply_markup
+            });
+            return;
+        }
+        
+        if (!user.stream) {
+            await ctx.reply('🎓 Please select your stream.', {
+                reply_markup: streamKeyboard.reply_markup
+            });
+            return;
+        }
+        
+        const warning = user.language === 'hindi'
+            ? '⚠️ कृपया अपनी पढ़ाई पर ध्यान दें। यादृच्छिक संदेश भेजने से आपको ब्लॉक किया जा सकता है।'
+            : '⚠️ Please focus on your studies. Sending random messages may get you blocked.';
+        
+        await ctx.reply(warning);
+    } catch (error) {
+        console.error('❌ Random message handler error:', error);
+        // Don't send error for random messages to avoid spam
+    }
+});
 
 // Auto-unblock users every hour
 cron.schedule('0 * * * *', async () => {
@@ -412,9 +1023,20 @@ const startBot = async () => {
             console.error('1. Stop local terminal running the bot');
             console.error('2. Check other hosting platforms (Vercel, Heroku, etc.)');
             console.error('3. Wait 2 minutes and restart');
+            
+            // Try to fix by deleting webhook
+            try {
+                await bot.telegram.deleteWebhook();
+                console.log('✅ Deleted webhook, try restarting...');
+            } catch (e) {
+                console.error('❌ Could not delete webhook:', e.message);
+            }
         }
         
-        process.exit(1);
+        // Don't exit in production, let Railway restart
+        if (!RAILWAY_ENVIRONMENT) {
+            process.exit(1);
+        }
     }
 };
 
