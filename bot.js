@@ -996,7 +996,8 @@ const startBot = async () => {
         if (RAILWAY_ENVIRONMENT || process.env.NODE_ENV === 'production') {
             // Use webhooks for Railway
             const webhookPath = `/webhook/${BOT_TOKEN}`;
-            const webhookUrl = `https://${process.env.RAILWAY_STATIC_URL || 'localhost:3000'}${webhookPath}`;
+            const webhookUrl = `const webhookUrl = `${process.env.RAILWAY_PUBLIC_DOMAIN}${webhookPath}`;
+
             
             await bot.telegram.setWebhook(webhookUrl);
             console.log(`✅ Webhook set to: ${webhookUrl}`);
