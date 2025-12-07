@@ -13,7 +13,7 @@ def get_main_menu_keyboard(is_admin=False):
             ["📚 Browse Subjects"],
             ["ℹ️ Help"]
         ]
-    return ReplyKeyboardMarkup(buttons, resize_keyboard=True)
+    return ReplyKeyboardMarkup(buttons, resize_keyboard=True, input_field_placeholder="Select an option...")
 
 def get_subjects_keyboard():
     keyboard = []
@@ -54,7 +54,7 @@ def get_user_management_keyboard(users):
     keyboard = []
     for user in users:
         status = "🚫 Blocked" if user.is_blocked else "✅ Active"
-        btn_text = f"{user.first_name} - {status}"
+        btn_text = f"{user.first_name or 'User'} - {status}"
         keyboard.append([
             InlineKeyboardButton(btn_text, callback_data=f"user_detail_{user.user_id}")
         ])
