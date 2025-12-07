@@ -38,8 +38,8 @@ class Chapter(Base):
     name = Column(String(200), nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    subject = relationship("Subject")
-    contents = relationship("Content", cascade="all, delete-orphan")
+    subject = relationship("Subject", backref="chapters")
+    contents = relationship("Content", back_populates="chapter", cascade="all, delete-orphan")
 
 class Content(Base):
     __tablename__ = 'contents'
@@ -52,7 +52,7 @@ class Content(Base):
     file_id = Column(String(200))  # Telegram file_id for faster sending
     created_at = Column(DateTime, default=datetime.utcnow)
     
-    chapter = relationship("Chapter")
+    chapter = relationship("Chapter", back_populates="contents", overlaps="contents")
 
 class UserAction(Base):
     __tablename__ = 'user_actions'
