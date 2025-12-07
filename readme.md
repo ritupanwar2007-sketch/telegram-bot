@@ -1,48 +1,40 @@
-# 📚 Board Booster Bot
+# Board Booster Telegram Bot 📚
 
-A comprehensive Telegram bot for educational content delivery with multi-language support, created by **Team Hackers**.
+A comprehensive board exam preparation bot with admin features for content management.
 
-## 🌟 Features
+## Features
 
-- **Multi-language Support**: Hindi & English
-- **Three Streams**: Non-Medical, Medical, Commerce
-- **Comprehensive Subjects**: All major subjects for each stream
-- **Admin Panel**: Add chapters, upload content, manage users
-- **Anti-Spam System**: Auto-block after 5 random messages
-- **Auto-Unblock**: After 24 hours automatically
-- **Content Types**: Lectures (MP4), DPPs, Notes (PDF)
-- **User Tracking**: Monitor user activity and progress
+### User Features:
+- Browse subjects (Physics, Chemistry, Maths, English, Biology)
+- Access chapter-wise content
+- Three content types: Video Lectures, PDF Notes, DPPs
+- Warning system for misuse
+- Automatic 24-hour unblock
 
-## 🚀 Quick Deployment on Railway
+### Admin Features:
+- Add/Delete chapters
+- Upload content (videos & PDFs)
+- User management (block/unblock)
+- View user statistics
 
-[![Deploy on Railway](https://railway.app/button.svg)](https://railway.app/template/XgWx7o?referralCode=team-hackers)
+## Deployment on Railway
 
-### One-Click Deployment:
-1. Click the "Deploy on Railway" button above
-2. Add your Telegram Bot Token
-3. Add your Telegram ID as admin
-4. Deploy!
+1. **Fork/Clone** this repository
 
-## 🛠️ Manual Setup
+2. **Create new Railway project:**
+   - Connect your GitHub repository
+   - Railway will auto-detect the Python project
 
-### Prerequisites:
-- Node.js 18+ 
-- MongoDB
-- Telegram Bot Token from [@BotFather](https://t.me/BotFather)
+3. **Set Environment Variables:**
+   - `BOT_TOKEN`: Your Telegram bot token
+   - `ADMIN_IDS`: Comma-separated admin user IDs
+   - `DATABASE_URL`: Railway provides this automatically
 
-### Installation:
+4. **Deploy:**
+   - Railway will install dependencies and start the bot
 
+## Local Development
+
+1. **Install dependencies:**
 ```bash
-# Clone repository
-git clone https://github.com/YOUR_USERNAME/board-booster-bot.git
-cd board-booster-bot
-
-# Install dependencies
-npm install
-
-# Configure environment
-cp .env.example .env
-# Edit .env with your credentials
-
-# Start the bot
-npm start
+pip install -r requirements.txt
