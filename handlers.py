@@ -17,7 +17,7 @@ def start_command(update: Update, context: CallbackContext):
     user = update.effective_user
     db_user = get_user(user.id, user.username, user.first_name, user.last_name)
     
-    if db_user.is_blocked:
+    if db_user.is_blocked and user.id not in config.ADMIN_IDS:  # Admins can't be blocked
         update.message.reply_text("🚫 You are currently blocked. Please try again later.")
         return
     
@@ -57,6 +57,28 @@ def admin_command(update: Update, context: CallbackContext):
 
 def handle_message(update: Update, context: CallbackContext):
     user = update.effective_user
+    
+    # Admins can send any message without warnings
+    if user.id in config.ADMIN_IDS:
+        text = update.message.text
+        
+        if text == "📚 Browse Subjects":
+            update.message.reply_text(
+                "📚 *Select a Subject:*",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=get_subjects_keyboard()
+            )
+        elif text == "⚙️ Admin Panel":
+            admin_command(update, context)
+        elif text == "ℹ️ Help":
+            help_command(update, context)
+        else:
+            update.message.reply_text(
+                "Please use the menu buttons or /admin for admin commands."
+            )
+        return
+    
+    # Regular users
     db_user = get_user(user.id, user.username, user.first_name, user.last_name)
     
     if db_user.is_blocked:
@@ -71,12 +93,10 @@ def handle_message(update: Update, context: CallbackContext):
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=get_subjects_keyboard()
         )
-    elif text == "⚙️ Admin Panel":
-        admin_command(update, context)
     elif text == "ℹ️ Help":
         help_command(update, context)
     else:
-        # Unauthorized message
+        # Unauthorized message for regular users only
         warnings = add_warning(user.id)
         remaining = config.MAX_WARNINGS - warnings
         
@@ -186,7 +206,7 @@ def callback_query_handler(update: Update, context: CallbackContext):
             keyboard = get_chapters_keyboard(subject.id, "admin")
             # Add "Add New Chapter" button
             keyboard.inline_keyboard.insert(0, [
-                InlineKeyboardButton("➕ Add New Chapter", callback_data="add_chapter")
+                InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
             ])
             
             query.edit_message_text(
@@ -196,11 +216,14 @@ def callback_query_handler(update: Update, context: CallbackContext):
             )
         session.close()
     
-    elif data == "add_chapter":
+    elif data == "add_new_chapter":
         query.edit_message_text(
-            "Enter the name of the new chapter:"
+            "✏️ *Add New Chapter*\n\nPlease enter the name of the new chapter:",
+            parse_mode=ParseMode.MARKDOWN
         )
-        return ENTER_CHAPTER
+        # Set state for chapter name input
+        context.user_data['awaiting_chapter_name'] = True
+        # Don't return ConversationHandler state here
     
     elif data.startswith("chapter_admin_"):
         chapter_id = int(data.split("_")[2])
@@ -210,13 +233,40 @@ def callback_query_handler(update: Update, context: CallbackContext):
         if chapter:
             keyboard = [
                 [InlineKeyboardButton("🗑️ Delete Chapter", callback_data=f"delete_chapter_{chapter_id}")],
-                [InlineKeyboardButton("🔙 Back", callback_data=f"subject_{chapter.subject.code}")]
+                [InlineKeyboardButton("🔙 Back", callback_data=f"back_to_subject_{chapter.subject.code}")]
             ]
             query.edit_message_text(
                 f"Chapter: *{chapter.name}*\n\nSelect action:",
                 parse_mode=ParseMode.MARKDOWN,
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
+        session.close()
+    
+    elif data.startswith("delete_chapter_"):
+        chapter_id = int(data.split("_")[2])
+        session = Session()
+        chapter = session.query(Chapter).get(chapter_id)
+        
+        if chapter:
+            chapter_name = chapter.name
+            subject_code = chapter.subject.code
+            session.delete(chapter)
+            session.commit()
+            query.answer(f"✅ Chapter '{chapter_name}' deleted successfully!")
+            
+            # Go back to subject's chapter list
+            subject = session.query(Subject).filter_by(code=subject_code).first()
+            if subject:
+                keyboard = get_chapters_keyboard(subject.id, "admin")
+                keyboard.inline_keyboard.insert(0, [
+                    InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+                ])
+                
+                query.edit_message_text(
+                    f"📖 *{subject.name} - Chapters*\nManage chapters:",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=keyboard
+                )
         session.close()
     
     # Admin Flow - Add Content
@@ -227,7 +277,6 @@ def callback_query_handler(update: Update, context: CallbackContext):
             reply_markup=get_subjects_keyboard()
         )
         context.user_data['admin_mode'] = 'add_content'
-        return SELECT_SUBJECT_CONTENT
     
     # User Management
     elif data == "admin_users":
@@ -283,7 +332,7 @@ def callback_query_handler(update: Update, context: CallbackContext):
     # Navigation
     elif data == "back_to_main":
         query.edit_message_text(
-            "🔙 Back to main menu",
+            "Main Menu",
             reply_markup=get_main_menu_keyboard(is_admin=user.id in config.ADMIN_IDS)
         )
     
@@ -312,13 +361,120 @@ def callback_query_handler(update: Update, context: CallbackContext):
             parse_mode=ParseMode.MARKDOWN,
             reply_markup=get_admin_keyboard()
         )
+    
+    elif data.startswith("back_to_subject_"):
+        subject_code = data.split("_")[3]
+        session = Session()
+        subject = session.query(Subject).filter_by(code=subject_code).first()
+        
+        if subject:
+            keyboard = get_chapters_keyboard(subject.id, "admin")
+            keyboard.inline_keyboard.insert(0, [
+                InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+            ])
+            
+            query.edit_message_text(
+                f"📖 *{subject.name} - Chapters*\nManage chapters:",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=keyboard
+            )
+        session.close()
+
+# Handle chapter name input from admin
+def handle_chapter_name_input(update: Update, context: CallbackContext):
+    user = update.effective_user
+    
+    # Check if user is admin
+    if user.id not in config.ADMIN_IDS:
+        update.message.reply_text("⛔ You are not authorized to perform this action.")
+        return
+    
+    # Check if we're awaiting chapter name
+    if not context.user_data.get('awaiting_chapter_name'):
+        # Check if it's a regular message
+        if user.id in config.ADMIN_IDS:
+            # Admin can send any message without warnings
+            text = update.message.text
+            
+            if text == "📚 Browse Subjects":
+                update.message.reply_text(
+                    "📚 *Select a Subject:*",
+                    parse_mode=ParseMode.MARKDOWN,
+                    reply_markup=get_subjects_keyboard()
+                )
+            elif text == "⚙️ Admin Panel":
+                admin_command(update, context)
+            elif text == "ℹ️ Help":
+                help_command(update, context)
+            else:
+                update.message.reply_text(
+                    "Please use the menu buttons or /admin for admin commands."
+                )
+        return
+    
+    # Process chapter name
+    chapter_name = update.message.text.strip()
+    
+    if not chapter_name:
+        update.message.reply_text("❌ Chapter name cannot be empty. Please enter a valid name:")
+        return
+    
+    subject_id = context.user_data.get('admin_subject')
+    
+    if not subject_id:
+        update.message.reply_text("❌ Error: No subject selected. Please start over from admin panel.")
+        context.user_data.pop('awaiting_chapter_name', None)
+        return
+    
+    session = Session()
+    
+    # Check if chapter already exists
+    existing = session.query(Chapter).filter_by(
+        subject_id=subject_id,
+        name=chapter_name
+    ).first()
+    
+    if existing:
+        update.message.reply_text(f"❌ Chapter '{chapter_name}' already exists in this subject!")
+        session.close()
+        context.user_data.pop('awaiting_chapter_name', None)
+        return
+    
+    # Add new chapter
+    new_chapter = Chapter(
+        subject_id=subject_id,
+        name=chapter_name
+    )
+    session.add(new_chapter)
+    session.commit()
+    
+    # Get subject for display
+    subject = session.query(Subject).get(subject_id)
+    session.close()
+    
+    # Clear the flag
+    context.user_data.pop('awaiting_chapter_name', None)
+    
+    update.message.reply_text(f"✅ Chapter '{chapter_name}' added to {subject.name} successfully!")
+    
+    # Show updated chapter list
+    keyboard = get_chapters_keyboard(subject_id, "admin")
+    keyboard.inline_keyboard.insert(0, [
+        InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+    ])
+    
+    update.message.reply_text(
+        f"📖 *{subject.name} - Chapters*\nManage chapters:",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=keyboard
+    )
 
 # Content sending handler
 def send_content_number(update: Update, context: CallbackContext):
     user = update.effective_user
     db_user = get_user(user.id, user.username, user.first_name, user.last_name)
     
-    if db_user.is_blocked:
+    if db_user.is_blocked and user.id not in config.ADMIN_IDS:  # Admins can't be blocked
         update.message.reply_text("🚫 You are currently blocked. Please try again later.")
         return
     
@@ -398,51 +554,12 @@ def send_content_number(update: Update, context: CallbackContext):
         
     except ValueError:
         update.message.reply_text("❌ Please enter a valid number.")
-        add_warning(user.id)
+        # Don't add warning for admin
+        if user.id not in config.ADMIN_IDS:
+            add_warning(user.id)
 
-# Admin conversation handlers
-def add_chapter_name(update: Update, context: CallbackContext):
-    chapter_name = update.message.text
-    subject_id = context.user_data.get('admin_subject')
-    
-    if not subject_id:
-        update.message.reply_text("❌ Error: Please start over.")
-        return ConversationHandler.END
-    
-    session = Session()
-    
-    # Check if chapter already exists
-    existing = session.query(Chapter).filter_by(
-        subject_id=subject_id,
-        name=chapter_name
-    ).first()
-    
-    if existing:
-        update.message.reply_text("❌ Chapter already exists!")
-        session.close()
-        return ConversationHandler.END
-    
-    # Add new chapter
-    new_chapter = Chapter(
-        subject_id=subject_id,
-        name=chapter_name
-    )
-    session.add(new_chapter)
-    session.commit()
-    session.close()
-    
-    update.message.reply_text(f"✅ Chapter '{chapter_name}' added successfully!")
-    
-    # Return to admin panel
-    update.message.reply_text(
-        "⚙️ *Admin Panel*\nSelect an option:",
-        parse_mode=ParseMode.MARKDOWN,
-        reply_markup=get_admin_keyboard()
-    )
-    
-    return ConversationHandler.END
-
-def select_subject_content(update: Update, context: CallbackContext):
+# Admin add content handlers
+def select_subject_content_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
@@ -452,6 +569,7 @@ def select_subject_content(update: Update, context: CallbackContext):
     
     if subject:
         context.user_data['content_subject'] = subject.id
+        context.user_data['admin_mode'] = 'add_content'
         query.edit_message_text(
             f"➕ *Add Content to {subject.name}*\nSelect chapter:",
             parse_mode=ParseMode.MARKDOWN,
@@ -459,9 +577,8 @@ def select_subject_content(update: Update, context: CallbackContext):
         )
     
     session.close()
-    return SELECT_CHAPTER_CONTENT
 
-def select_chapter_content(update: Update, context: CallbackContext):
+def select_chapter_content_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
@@ -472,16 +589,20 @@ def select_chapter_content(update: Update, context: CallbackContext):
     chapter = session.query(Chapter).get(chapter_id)
     
     if chapter:
+        keyboard = []
+        for code, name in config.CONTENT_TYPES.items():
+            keyboard.append([InlineKeyboardButton(name, callback_data=f"add_content_type_{chapter_id}_{code}")])
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_add_content")])
+        
         query.edit_message_text(
             f"📚 *{chapter.name}*\nSelect content type:",
             parse_mode=ParseMode.MARKDOWN,
-            reply_markup=get_content_types_keyboard(chapter_id, "add")
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
     
     session.close()
-    return SELECT_CONTENT_TYPE
 
-def select_content_type_admin(update: Update, context: CallbackContext):
+def select_content_type_admin_handler(update: Update, context: CallbackContext):
     query = update.callback_query
     query.answer()
     
@@ -494,13 +615,25 @@ def select_content_type_admin(update: Update, context: CallbackContext):
     query.edit_message_text(
         f"Enter content number for {config.CONTENT_TYPES[content_type]}:"
     )
-    
-    return ENTER_CONTENT_NUMBER
+    context.user_data['awaiting_content_number'] = True
 
-def enter_content_number_admin(update: Update, context: CallbackContext):
+def enter_content_number_admin_handler(update: Update, context: CallbackContext):
+    user = update.effective_user
+    
+    if user.id not in config.ADMIN_IDS:
+        update.message.reply_text("⛔ You are not authorized to perform this action.")
+        return
+    
+    # Check if we're awaiting content number
+    if not context.user_data.get('awaiting_content_number'):
+        return
+    
     try:
         content_number = int(update.message.text)
         context.user_data['content_number'] = content_number
+        
+        # Clear the flag
+        context.user_data.pop('awaiting_content_number', None)
         
         # Check if content already exists
         session = Session()
@@ -513,7 +646,7 @@ def enter_content_number_admin(update: Update, context: CallbackContext):
         if existing:
             update.message.reply_text("❌ Content with this number already exists!")
             session.close()
-            return ConversationHandler.END
+            return
         
         session.close()
         
@@ -522,37 +655,46 @@ def enter_content_number_admin(update: Update, context: CallbackContext):
         file_type = "MP4 video" if content_type == "lecture" else "PDF"
         
         update.message.reply_text(
-            f"Please send the {file_type} file for {config.CONTENT_TYPES[content_type]} #{content_number}"
+            f"Please send the {file_type} file for {config.CONTENT_TYPES[content_type]} #{content_number}\n\n"
+            f"Format: {'Video (MP4)' if content_type == 'lecture' else 'PDF'}"
         )
-        
-        return SEND_CONTENT_FILE
+        context.user_data['awaiting_content_file'] = True
         
     except ValueError:
         update.message.reply_text("❌ Please enter a valid number.")
-        return ENTER_CONTENT_NUMBER
 
-def save_content_file(update: Update, context: CallbackContext):
+def save_content_file_handler(update: Update, context: CallbackContext):
+    user = update.effective_user
+    
+    if user.id not in config.ADMIN_IDS:
+        update.message.reply_text("⛔ You are not authorized to perform this action.")
+        return
+    
+    # Check if we're awaiting file
+    if not context.user_data.get('awaiting_content_file'):
+        return
+    
     # Get file
     if update.message.video:
         file = update.message.video
-        expected_type = "lecture"
+        received_type = "lecture"
     elif update.message.document:
         file = update.message.document
         # Check if it's PDF
         if file.mime_type != "application/pdf":
             update.message.reply_text("❌ Please send a PDF file for notes/DPP.")
-            return SEND_CONTENT_FILE
-        expected_type = "note" if context.user_data['content_type'] == "note" else "dpp"
+            return
+        received_type = "note" if context.user_data['content_type'] == "note" else "dpp"
     else:
         update.message.reply_text("❌ Please send a valid file.")
-        return SEND_CONTENT_FILE
+        return
     
     # Verify file type matches content type
-    if context.user_data['content_type'] != expected_type:
+    if context.user_data['content_type'] != received_type:
         update.message.reply_text(
-            f"❌ File type mismatch. Expected {context.user_data['content_type']}, got {expected_type}."
+            f"❌ File type mismatch. Expected {context.user_data['content_type']}, got {received_type}."
         )
-        return SEND_CONTENT_FILE
+        return
     
     # Save file
     file_path = save_file(
@@ -564,7 +706,7 @@ def save_content_file(update: Update, context: CallbackContext):
     
     if not file_path:
         update.message.reply_text("❌ Error saving file.")
-        return ConversationHandler.END
+        return
     
     # Save to database
     session = Session()
@@ -578,6 +720,9 @@ def save_content_file(update: Update, context: CallbackContext):
     session.commit()
     session.close()
     
+    # Clear the flag
+    context.user_data.pop('awaiting_content_file', None)
+    
     update.message.reply_text(
         f"✅ {config.CONTENT_TYPES[context.user_data['content_type']]} #{context.user_data['content_number']} added successfully!"
     )
@@ -588,12 +733,3 @@ def save_content_file(update: Update, context: CallbackContext):
         parse_mode=ParseMode.MARKDOWN,
         reply_markup=get_admin_keyboard()
     )
-    
-    return ConversationHandler.END
-
-def cancel(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "Operation cancelled.",
-        reply_markup=get_main_menu_keyboard(is_admin=update.effective_user.id in config.ADMIN_IDS)
-    )
-    return ConversationHandler.END
