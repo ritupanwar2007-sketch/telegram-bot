@@ -1,5 +1,6 @@
-python-telegram-bot==20.7  # Updated version that supports Python 3.13
+python-telegram-bot==20.7
 python-dotenv==1.0.0
 sqlalchemy==2.0.23
 psycopg2-binary==2.9.9
-Pillow==10.1.0  # For image handling
+Pillow==9.5.0  # Downgraded for compatibility
+aiofiles==23.2.1
