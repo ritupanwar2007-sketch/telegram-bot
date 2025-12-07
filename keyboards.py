@@ -30,14 +30,29 @@ def get_chapters_keyboard(subject_id, action="browse"):
     
     keyboard = []
     for chapter in chapters:
-        keyboard.append([InlineKeyboardButton(chapter.name, callback_data=f"chapter_{action}_{chapter.id}")])
-    keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_subjects")])
+        if action == "browse":
+            callback_data = f"chapter_browse_{chapter.id}"
+        else:  # admin or add_content
+            callback_data = f"chapter_{action}_{chapter.id}"
+        keyboard.append([InlineKeyboardButton(chapter.name, callback_data=callback_data)])
+    
+    if action == "browse":
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="back_to_subjects")])
+    elif action == "admin":
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"back_to_subject_{subject_id}")])
+    elif action == "add_content":
+        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_add_content")])
+    
     return InlineKeyboardMarkup(keyboard)
 
 def get_content_types_keyboard(chapter_id, action="browse"):
     keyboard = []
     for code, name in config.CONTENT_TYPES.items():
-        keyboard.append([InlineKeyboardButton(name, callback_data=f"content_{action}_{chapter_id}_{code}")])
+        if action == "browse":
+            callback_data = f"content_browse_{chapter_id}_{code}"
+        else:
+            callback_data = f"select_content_type_{chapter_id}_{code}"
+        keyboard.append([InlineKeyboardButton(name, callback_data=callback_data)])
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data=f"back_to_chapters_{chapter_id}")])
     return InlineKeyboardMarkup(keyboard)
 
@@ -68,8 +83,4 @@ def get_user_action_keyboard(user_id, is_blocked):
     else:
         keyboard.append([InlineKeyboardButton("🚫 Block User", callback_data=f"block_user_{user_id}")])
     keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_users")])
-    return InlineKeyboardMarkup(keyboard)
-
-def get_back_keyboard(target):
-    keyboard = [[InlineKeyboardButton("🔙 Back", callback_data=target)]]
     return InlineKeyboardMarkup(keyboard)
