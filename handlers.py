@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
+from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 import os
 from datetime import datetime
@@ -8,10 +8,6 @@ import config
 from database import Session, Subject, Chapter, Content
 from keyboards import *
 from utils import *
-
-# Conversation states
-SELECT_SUBJECT, ENTER_CHAPTER, CONFIRM_CHAPTER = range(3)
-SELECT_SUBJECT_CONTENT, SELECT_CHAPTER_CONTENT, SELECT_CONTENT_TYPE, ENTER_CONTENT_NUMBER, SEND_CONTENT_FILE = range(5)
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -73,9 +69,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif text == "ℹ️ Help":
             await help_command(update, context)
         else:
-            await update.message.reply_text(
-                "Please use the menu buttons or /admin for admin commands."
-            )
+            # Check if we're waiting for chapter name
+            if context.user_data.get('awaiting_chapter_name'):
+                await handle_chapter_name_input(update, context)
+            elif context.user_data.get('awaiting_content_number'):
+                await enter_content_number_admin_handler(update, context)
+            else:
+                await update.message.reply_text(
+                    "Please use the menu buttons or /admin for admin commands."
+                )
         return
     
     # Regular users
@@ -96,21 +98,25 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif text == "ℹ️ Help":
         await help_command(update, context)
     else:
-        # Unauthorized message for regular users only
-        warnings = add_warning(user.id)
-        remaining = config.MAX_WARNINGS - warnings
-        
-        if remaining > 0:
-            await update.message.reply_text(
-                f"⚠️ *Warning {warnings}/{config.MAX_WARNINGS}*\n"
-                f"Please use the menu buttons only. {remaining} warnings remaining before block.",
-                parse_mode='Markdown'
-            )
+        # Check if it's a content number request
+        if context.user_data.get('browse_chapter') and context.user_data.get('browse_content_type'):
+            await send_content_number(update, context)
         else:
-            await update.message.reply_text(
-                "🚫 You have been blocked for 24 hours due to multiple warnings. "
-                "You will be automatically unblocked after 24 hours."
-            )
+            # Unauthorized message for regular users only
+            warnings = add_warning(user.id)
+            remaining = config.MAX_WARNINGS - warnings
+            
+            if remaining > 0:
+                await update.message.reply_text(
+                    f"⚠️ *Warning {warnings}/{config.MAX_WARNINGS}*\n"
+                    f"Please use the menu buttons only. {remaining} warnings remaining before block.",
+                    parse_mode='Markdown'
+                )
+            else:
+                await update.message.reply_text(
+                    "🚫 You have been blocked for 24 hours due to multiple warnings. "
+                    "You will be automatically unblocked after 24 hours."
+                )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = """
@@ -206,7 +212,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             keyboard = get_chapters_keyboard(subject.id, "admin")
             # Add "Add New Chapter" button
             keyboard.inline_keyboard.insert(0, [
-                InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+                InlineKeyboardButton("➕ Add New Chapter", callback_data=f"add_chapter_{subject.id}")
             ])
             
             await query.edit_message_text(
@@ -216,12 +222,20 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             )
         session.close()
     
-    elif data == "add_new_chapter":
-        await query.edit_message_text(
-            "✏️ *Add New Chapter*\n\nPlease enter the name of the new chapter:",
-            parse_mode='Markdown'
-        )
+    elif data.startswith("add_chapter_"):
+        subject_id = int(data.split("_")[2])
+        context.user_data['admin_subject'] = subject_id
         context.user_data['awaiting_chapter_name'] = True
+        
+        session = Session()
+        subject = session.query(Subject).get(subject_id)
+        session.close()
+        
+        if subject:
+            await query.edit_message_text(
+                f"✏️ *Add New Chapter to {subject.name}*\n\nPlease enter the name of the new chapter:",
+                parse_mode='Markdown'
+            )
     
     elif data.startswith("chapter_admin_"):
         chapter_id = int(data.split("_")[2])
@@ -248,16 +262,17 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         if chapter:
             chapter_name = chapter.name
             subject_code = chapter.subject.code
+            subject_id = chapter.subject.id
             session.delete(chapter)
             session.commit()
             await query.answer(f"✅ Chapter '{chapter_name}' deleted successfully!")
             
             # Go back to subject's chapter list
-            subject = session.query(Subject).filter_by(code=subject_code).first()
+            subject = session.query(Subject).get(subject_id)
             if subject:
                 keyboard = get_chapters_keyboard(subject.id, "admin")
                 keyboard.inline_keyboard.insert(0, [
-                    InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+                    InlineKeyboardButton("➕ Add New Chapter", callback_data=f"add_chapter_{subject.id}")
                 ])
                 
                 await query.edit_message_text(
@@ -275,6 +290,59 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup=get_subjects_keyboard()
         )
         context.user_data['admin_mode'] = 'add_content'
+        context.user_data['awaiting_content_subject'] = True
+    
+    elif data.startswith("subject_") and context.user_data.get('admin_mode') == 'add_content':
+        subject_code = data.split("_")[1]
+        session = Session()
+        subject = session.query(Subject).filter_by(code=subject_code).first()
+        
+        if subject:
+            context.user_data['content_subject'] = subject.id
+            context.user_data['awaiting_content_subject'] = False
+            context.user_data['awaiting_content_chapter'] = True
+            
+            await query.edit_message_text(
+                f"➕ *Add Content to {subject.name}*\nSelect chapter:",
+                parse_mode='Markdown',
+                reply_markup=get_chapters_keyboard(subject.id, "add_content")
+            )
+        session.close()
+    
+    elif data.startswith("chapter_add_content_"):
+        chapter_id = int(data.split("_")[3])
+        context.user_data['content_chapter'] = chapter_id
+        context.user_data['awaiting_content_chapter'] = False
+        context.user_data['awaiting_content_type'] = True
+        
+        session = Session()
+        chapter = session.query(Chapter).get(chapter_id)
+        session.close()
+        
+        if chapter:
+            keyboard = []
+            for code, name in config.CONTENT_TYPES.items():
+                keyboard.append([InlineKeyboardButton(name, callback_data=f"select_content_type_{chapter_id}_{code}")])
+            keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_add_content")])
+            
+            await query.edit_message_text(
+                f"📚 *{chapter.name}*\nSelect content type:",
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+    
+    elif data.startswith("select_content_type_"):
+        _, _, _, chapter_id, content_type = data.split("_")
+        chapter_id = int(chapter_id)
+        
+        context.user_data['content_chapter'] = chapter_id
+        context.user_data['content_type'] = content_type
+        context.user_data['awaiting_content_type'] = False
+        context.user_data['awaiting_content_number'] = True
+        
+        await query.edit_message_text(
+            f"Enter content number for {config.CONTENT_TYPES[content_type]}:"
+        )
     
     # User Management
     elif data == "admin_users":
@@ -368,7 +436,7 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         if subject:
             keyboard = get_chapters_keyboard(subject.id, "admin")
             keyboard.inline_keyboard.insert(0, [
-                InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+                InlineKeyboardButton("➕ Add New Chapter", callback_data=f"add_chapter_{subject.id}")
             ])
             
             await query.edit_message_text(
@@ -379,34 +447,15 @@ async def callback_query_handler(update: Update, context: ContextTypes.DEFAULT_T
         session.close()
 
 async def handle_chapter_name_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle chapter name input from admin"""
     user = update.effective_user
     
-    # Check if user is admin
     if user.id not in config.ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorized to perform this action.")
         return
     
     # Check if we're awaiting chapter name
     if not context.user_data.get('awaiting_chapter_name'):
-        # Check if it's a regular message
-        if user.id in config.ADMIN_IDS:
-            # Admin can send any message without warnings
-            text = update.message.text
-            
-            if text == "📚 Browse Subjects":
-                await update.message.reply_text(
-                    "📚 *Select a Subject:*",
-                    parse_mode='Markdown',
-                    reply_markup=get_subjects_keyboard()
-                )
-            elif text == "⚙️ Admin Panel":
-                await admin_command(update, context)
-            elif text == "ℹ️ Help":
-                await help_command(update, context)
-            else:
-                await update.message.reply_text(
-                    "Please use the menu buttons or /admin for admin commands."
-                )
         return
     
     # Process chapter name
@@ -457,7 +506,7 @@ async def handle_chapter_name_input(update: Update, context: ContextTypes.DEFAUL
     # Show updated chapter list
     keyboard = get_chapters_keyboard(subject_id, "admin")
     keyboard.inline_keyboard.insert(0, [
-        InlineKeyboardButton("➕ Add New Chapter", callback_data="add_new_chapter")
+        InlineKeyboardButton("➕ Add New Chapter", callback_data=f"add_chapter_{subject_id}")
     ])
     
     await update.message.reply_text(
@@ -467,6 +516,7 @@ async def handle_chapter_name_input(update: Update, context: ContextTypes.DEFAUL
     )
 
 async def send_content_number(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle content number input from user"""
     user = update.effective_user
     db_user = get_user(user.id, user.username, user.first_name, user.last_name)
     
@@ -491,9 +541,6 @@ async def send_content_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         ).first()
         
         if content:
-            # Get file extension
-            ext = "mp4" if content_type == "lecture" else "pdf"
-            
             # Try to send using file_id if available
             if content.file_id:
                 try:
@@ -510,6 +557,18 @@ async def send_content_number(update: Update, context: ContextTypes.DEFAULT_TYPE
                             caption=f"📄 {config.CONTENT_TYPES[content_type]} #{content_number}"
                         )
                     log_user_action(user.id, f"downloaded_{content_type}_{content_number}")
+                    
+                    # Clear the context
+                    context.user_data.pop('browse_chapter', None)
+                    context.user_data.pop('browse_content_type', None)
+                    
+                    # Show subject selection again
+                    await update.message.reply_text(
+                        "📚 Select a Subject:",
+                        reply_markup=get_subjects_keyboard()
+                    )
+                    
+                    session.close()
                     return
                 except BadRequest:
                     pass  # Fall back to file path
@@ -543,6 +602,10 @@ async def send_content_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         session.close()
         
+        # Clear the context
+        context.user_data.pop('browse_chapter', None)
+        context.user_data.pop('browse_content_type', None)
+        
         # Show subject selection again
         await update.message.reply_text(
             "📚 Select a Subject:",
@@ -555,78 +618,17 @@ async def send_content_number(update: Update, context: ContextTypes.DEFAULT_TYPE
         if user.id not in config.ADMIN_IDS:
             add_warning(user.id)
 
-# Admin add content handlers
-async def select_subject_content_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    subject_code = query.data.split("_")[1]
-    session = Session()
-    subject = session.query(Subject).filter_by(code=subject_code).first()
-    
-    if subject:
-        context.user_data['content_subject'] = subject.id
-        context.user_data['admin_mode'] = 'add_content'
-        await query.edit_message_text(
-            f"➕ *Add Content to {subject.name}*\nSelect chapter:",
-            parse_mode='Markdown',
-            reply_markup=get_chapters_keyboard(subject.id, "add_content")
-        )
-    
-    session.close()
-    return SELECT_SUBJECT_CONTENT
-
-async def select_chapter_content_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    chapter_id = int(query.data.split("_")[2])
-    context.user_data['content_chapter'] = chapter_id
-    
-    session = Session()
-    chapter = session.query(Chapter).get(chapter_id)
-    
-    if chapter:
-        keyboard = []
-        for code, name in config.CONTENT_TYPES.items():
-            keyboard.append([InlineKeyboardButton(name, callback_data=f"add_content_type_{chapter_id}_{code}")])
-        keyboard.append([InlineKeyboardButton("🔙 Back", callback_data="admin_add_content")])
-        
-        await query.edit_message_text(
-            f"📚 *{chapter.name}*\nSelect content type:",
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    
-    session.close()
-    return SELECT_CHAPTER_CONTENT
-
-async def select_content_type_admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    
-    chapter_id = int(query.data.split("_")[2])
-    content_type = query.data.split("_")[3]
-    
-    context.user_data['content_chapter'] = chapter_id
-    context.user_data['content_type'] = content_type
-    
-    await query.edit_message_text(
-        f"Enter content number for {config.CONTENT_TYPES[content_type]}:"
-    )
-    context.user_data['awaiting_content_number'] = True
-    return SELECT_CONTENT_TYPE
-
 async def enter_content_number_admin_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle content number input for admin adding content"""
     user = update.effective_user
     
     if user.id not in config.ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorized to perform this action.")
-        return SELECT_CONTENT_TYPE
+        return
     
     # Check if we're awaiting content number
     if not context.user_data.get('awaiting_content_number'):
-        return SELECT_CONTENT_TYPE
+        return
     
     try:
         content_number = int(update.message.text)
@@ -646,7 +648,7 @@ async def enter_content_number_admin_handler(update: Update, context: ContextTyp
         if existing:
             await update.message.reply_text("❌ Content with this number already exists!")
             session.close()
-            return ConversationHandler.END
+            return
         
         session.close()
         
@@ -659,22 +661,24 @@ async def enter_content_number_admin_handler(update: Update, context: ContextTyp
             f"Format: {'Video (MP4)' if content_type == 'lecture' else 'PDF'}"
         )
         context.user_data['awaiting_content_file'] = True
-        return ENTER_CONTENT_NUMBER
         
     except ValueError:
         await update.message.reply_text("❌ Please enter a valid number.")
-        return SELECT_CONTENT_TYPE
 
 async def save_content_file_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle file upload for admin adding content"""
     user = update.effective_user
     
     if user.id not in config.ADMIN_IDS:
         await update.message.reply_text("⛔ You are not authorized to perform this action.")
-        return SEND_CONTENT_FILE
+        return
     
     # Check if we're awaiting file
     if not context.user_data.get('awaiting_content_file'):
-        return SEND_CONTENT_FILE
+        # Check if it's a regular file send (not in content adding flow)
+        if update.message.video or update.message.document:
+            await update.message.reply_text("Please use the admin panel to add content properly.")
+        return
     
     # Get file
     if update.message.video:
@@ -685,22 +689,23 @@ async def save_content_file_handler(update: Update, context: ContextTypes.DEFAUL
         # Check if it's PDF
         if file.mime_type != "application/pdf":
             await update.message.reply_text("❌ Please send a PDF file for notes/DPP.")
-            return SEND_CONTENT_FILE
+            return
         received_type = "note" if context.user_data['content_type'] == "note" else "dpp"
     else:
         await update.message.reply_text("❌ Please send a valid file.")
-        return SEND_CONTENT_FILE
+        return
     
     # Verify file type matches content type
     if context.user_data['content_type'] != received_type:
         await update.message.reply_text(
             f"❌ File type mismatch. Expected {context.user_data['content_type']}, got {received_type}."
         )
-        return SEND_CONTENT_FILE
+        return
     
     # Save file
+    file_obj = await file.get_file()
     file_path = save_file(
-        await file.get_file(),
+        file_obj,
         context.user_data['content_type'],
         context.user_data['content_chapter'],
         context.user_data['content_number']
@@ -708,7 +713,7 @@ async def save_content_file_handler(update: Update, context: ContextTypes.DEFAUL
     
     if not file_path:
         await update.message.reply_text("❌ Error saving file.")
-        return ConversationHandler.END
+        return
     
     # Save to database
     session = Session()
@@ -720,14 +725,21 @@ async def save_content_file_handler(update: Update, context: ContextTypes.DEFAUL
     )
     session.add(new_content)
     session.commit()
+    
+    # Get chapter and subject names for success message
+    chapter = session.query(Chapter).get(context.user_data['content_chapter'])
+    subject = chapter.subject if chapter else None
     session.close()
     
-    # Clear the flag
-    context.user_data.pop('awaiting_content_file', None)
+    # Clear all context flags
+    for key in ['awaiting_content_file', 'content_chapter', 'content_type', 'content_number']:
+        context.user_data.pop(key, None)
     
-    await update.message.reply_text(
-        f"✅ {config.CONTENT_TYPES[context.user_data['content_type']]} #{context.user_data['content_number']} added successfully!"
-    )
+    success_msg = f"✅ {config.CONTENT_TYPES[context.user_data['content_type']]} #{context.user_data['content_number']} added successfully!"
+    if subject and chapter:
+        success_msg = f"✅ {config.CONTENT_TYPES[context.user_data['content_type']]} #{context.user_data['content_number']} added to {subject.name} > {chapter.name} successfully!"
+    
+    await update.message.reply_text(success_msg)
     
     # Return to admin panel
     await update.message.reply_text(
@@ -735,12 +747,3 @@ async def save_content_file_handler(update: Update, context: ContextTypes.DEFAUL
         parse_mode='Markdown',
         reply_markup=get_admin_keyboard()
     )
-    
-    return ConversationHandler.END
-
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Operation cancelled.",
-        reply_markup=get_main_menu_keyboard(is_admin=update.effective_user.id in config.ADMIN_IDS)
-    )
-    return ConversationHandler.END
